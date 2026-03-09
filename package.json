@@ -1,0 +1,74 @@
+{
+	"name": "data-compute",
+	"version": "1.0.0",
+	"description": "A TypeScript-first computation graph engine that keeps derived state consistent across sync and async updates.",
+	"license": "ISC",
+	"type": "commonjs",
+	"main": "./dist/index.js",
+	"module": "./dist/index.mjs",
+	"types": "./dist/index.d.ts",
+	"files": [
+		"dist"
+	],
+	"scripts": {
+		"build": "tsup src/index.ts --format cjs,esm --dts --clean",
+		"dev": "npm run build -- --watch",
+		"lint": "biome check src",
+		"lint:fix": "biome check --write src",
+		"prepare": "husky",
+		"typecheck": "tsc --noEmit",
+		"test": "vitest run --typecheck",
+		"test:watch": "vitest --typecheck"
+	},
+	"keywords": [
+		"computation",
+		"graph",
+		"engine",
+		"derived",
+		"state",
+		"consistent",
+		"async",
+		"sync",
+		"concurrent",
+		"typescript",
+		"type-safe",
+		"proxy",
+		"data-compute"
+	],
+	"author": {
+		"name": "Sergei Shmakov",
+		"url": "https://github.com/sergeyshmakov"
+	},
+	"repository": {
+		"type": "git",
+		"url": "git+https://github.com/sergeyshmakov/data-compute.git"
+	},
+	"bugs": {
+		"url": "https://github.com/sergeyshmakov/data-compute/issues"
+	},
+	"homepage": "https://github.com/sergeyshmakov/data-compute#readme",
+	"release": {
+		"branches": [
+			"main"
+		]
+	},
+	"devDependencies": {
+		"@biomejs/biome": "2.4.6",
+		"@commitlint/cli": "^20.4.3",
+		"@commitlint/config-conventional": "^20.4.3",
+		"husky": "^9.1.7",
+		"semantic-release": "^25.0.3",
+		"tsup": "^8.5.1",
+		"typescript": "^5.9.3",
+		"vitest": "^4.0.18"
+	},
+	"peerDependencies": {
+		"typescript": ">=5.0.0"
+	},
+	"engines": {
+		"node": ">=20.0.0"
+	},
+	"volta": {
+		"node": "24.14.0"
+	}
+}
