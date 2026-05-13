@@ -1,0 +1,8 @@
+blank_issues_enabled: false
+contact_links:
+  - name: Documentation
+    url: https://sergeyshmakov.github.io/data-compute/
+    about: Browse the full documentation site first — your question may already be answered.
+  - name: Discussions
+    url: https://github.com/sergeyshmakov/data-compute/discussions
+    about: Usage questions, ideas, and general conversation.
