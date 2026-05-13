@@ -11,6 +11,7 @@ updates:
     open-pull-requests-limit: 5
     labels:
       - "dependencies"
+    dependency-type: "direct"
     groups:
       npm-production:
         dependency-type: "production"
@@ -19,3 +20,32 @@ updates:
     ignore:
       - dependency-name: "@types/node*"
         versions: [ ">=24" ]
+
+  - package-ecosystem: "npm"
+    directory: "/docs"
+    schedule:
+      interval: "monthly"
+      day: "monday"
+      time: "06:00"
+      timezone: "UTC"
+    open-pull-requests-limit: 1
+    labels:
+      - "dependencies"
+    dependency-type: "direct"
+    groups:
+      docs-dependencies:
+        patterns: ["*"]
+
+  - package-ecosystem: "github-actions"
+    directory: "/"
+    schedule:
+      interval: "monthly"
+      day: "monday"
+      time: "06:00"
+      timezone: "UTC"
+    open-pull-requests-limit: 1
+    labels:
+      - "dependencies"
+    groups:
+      github-actions:
+        patterns: ["*"]
