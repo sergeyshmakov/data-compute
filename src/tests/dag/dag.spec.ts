@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { normalizePath, pathDependencies } from "../../dag";
+import { normalizePath, pathDependencies } from "../../dag/index.js";
 
 describe("normalizePath", () => {
 	it("replaces numeric segments with asterisk", () => {

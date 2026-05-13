@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { resolveAccessor } from "../../tracking/accessor";
+import { resolveAccessor } from "../../tracking/accessor.js";
 
 describe("resolveAccessor", () => {
 	describe("single-level access", () => {

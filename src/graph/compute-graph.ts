@@ -1,6 +1,6 @@
-import { BatchCoordinator } from "../batch/coordinator";
-import { topoSort } from "../dag";
-import { resolveAccessor } from "../tracking/accessor";
+import { BatchCoordinator } from "../batch/coordinator.js";
+import { topoSort } from "../dag/index.js";
+import { resolveAccessor } from "../tracking/accessor.js";
 import type {
 	BatchDataSourceConfig,
 	ComputeInput,
@@ -14,9 +14,9 @@ import type {
 	NodeStatus,
 	RequestDataSourceConfig,
 	TraceStep,
-} from "../types";
-import { buildDepsMap, buildReverseDepsMap } from "./deps-maps";
-import { type FlatNode, flattenGraph } from "./flatten";
+} from "../types.js";
+import { buildDepsMap, buildReverseDepsMap } from "./deps-maps.js";
+import { type FlatNode, flattenGraph } from "./flatten.js";
 
 function isPlainObject(item: unknown): item is Record<string, unknown> {
 	return (

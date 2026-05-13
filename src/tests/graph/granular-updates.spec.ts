@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
-import { createGraph } from "../../graph";
+import { createGraph } from "../../graph/index.js";
 
 interface DeepState {
 	a?: { b?: { c?: number; d?: number } };

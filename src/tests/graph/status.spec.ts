@@ -1,12 +1,12 @@
 import { describe, expect, it } from "vitest";
-import { createGraph } from "../../graph";
+import { createGraph } from "../../graph/index.js";
 import type {
 	AbErrorRoot,
 	AbRoot,
 	AsyncDerivedRoot,
 	FastSlowRoot,
 	TotalRoot,
-} from "./test-types";
+} from "./test-types.js";
 
 describe("status and snapshot accessors", () => {
 	describe("status before compute", () => {

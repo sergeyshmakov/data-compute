@@ -1,6 +1,6 @@
-import { pathDependencies } from "../dag";
-import { dryRunProxy } from "../tracking/proxy";
-import type { FlatNode } from "./flatten";
+import { pathDependencies } from "../dag/index.js";
+import { dryRunProxy } from "../tracking/proxy.js";
+import type { FlatNode } from "./flatten.js";
 
 /**
  * Builds a map from each node path to the set of paths it reads.

@@ -1,5 +1,5 @@
-import { normalizePath } from "../dag";
-import { dryRunProxy } from "./proxy";
+import { normalizePath } from "../dag/index.js";
+import { dryRunProxy } from "./proxy.js";
 
 /** Resolves `(x) => x.total` to the string `"total"` via a dry-run proxy. */
 export function resolveAccessor<T>(accessor: (x: T) => unknown): string {

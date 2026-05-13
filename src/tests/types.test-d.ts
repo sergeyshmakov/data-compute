@@ -11,14 +11,14 @@ import {
 	each,
 	eachDataSource,
 	request,
-} from "../index";
+} from "../index.js";
 import type {
 	DataSourceMap,
 	DeepFormulaMap,
 	DeepPartial,
 	GraphError,
 	NodeSnapshot,
-} from "../types";
+} from "../types.js";
 
 // ── Schema types for tests ───────────────────────────────────────────────────
 

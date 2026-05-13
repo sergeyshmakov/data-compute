@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
-import { createGraph } from "../../graph";
-import type { AbRoot, DepsRoot, IntrospectionRoot } from "./test-types";
+import { createGraph } from "../../graph/index.js";
+import type { AbRoot, DepsRoot, IntrospectionRoot } from "./test-types.js";
 
 describe("graph introspection", () => {
 	describe("deps", () => {

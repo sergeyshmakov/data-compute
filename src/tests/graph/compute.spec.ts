@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
-import { batchRequest, createGraph, request } from "../../index";
-import type { BatchDataSourceConfig } from "../../types";
+import { batchRequest, createGraph, request } from "../../index.js";
+import type { BatchDataSourceConfig } from "../../types.js";
 import type {
 	AbcRoot,
 	AbErrorRoot,
@@ -16,7 +16,7 @@ import type {
 	SourceComputedRoot,
 	SumRoot,
 	SyncChainRoot,
-} from "./test-types";
+} from "./test-types.js";
 
 interface PricingForm {
 	productId: string;

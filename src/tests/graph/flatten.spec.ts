@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
-import { flattenGraph } from "../../graph/flatten";
-import { batchRequest, each, request } from "../../index";
+import { flattenGraph } from "../../graph/flatten.js";
+import { batchRequest, each, request } from "../../index.js";
 
 describe("flattenGraph", () => {
 	it("returns empty array for empty formulas", () => {

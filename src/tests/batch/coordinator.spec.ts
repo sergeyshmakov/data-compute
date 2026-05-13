@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
-import { BatchCoordinator } from "../../batch/coordinator";
-import type { BatchDataSourceConfig } from "../../types";
+import { BatchCoordinator } from "../../batch/coordinator.js";
+import type { BatchDataSourceConfig } from "../../types.js";
 
 describe("BatchCoordinator", () => {
 	describe("submit", () => {

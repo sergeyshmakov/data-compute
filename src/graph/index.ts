@@ -3,8 +3,8 @@ import type {
 	DataSourceMap,
 	DeepFormulaMap,
 	GraphOptions,
-} from "../types";
-import { ComputeGraph } from "./compute-graph";
+} from "../types.js";
+import { ComputeGraph } from "./compute-graph.js";
 
 export const createGraph: CreateGraph = ((...args: unknown[]) => {
 	// Overload 2: createGraph<Root>() → builder

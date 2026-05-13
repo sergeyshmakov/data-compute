@@ -1,17 +1,28 @@
 {
 	"name": "data-compute",
-	"version": "1.0.0",
-	"description": "A TypeScript-first computation graph engine that keeps derived state consistent across sync and async updates.",
-	"license": "ISC",
-	"type": "commonjs",
-	"main": "./dist/index.js",
-	"module": "./dist/index.mjs",
-	"types": "./dist/index.d.ts",
+	"version": "0.1.0",
+	"description": "Typed reactive derived state for TypeScript — with async-aware nodes. Build a typed DAG of formulas, mix sync calculations with async data sources, get atomic patches when anything changes.",
+	"license": "MIT",
+	"type": "module",
+	"main": "./dist/index.cjs",
+	"module": "./dist/index.js",
+	"exports": {
+		".": {
+			"types": "./dist/index.d.ts",
+			"import": "./dist/index.js",
+			"require": {
+				"types": "./dist/index.d.cts",
+				"default": "./dist/index.cjs"
+			},
+			"default": "./dist/index.js"
+		}
+	},
+	"sideEffects": false,
 	"files": [
 		"dist"
 	],
 	"scripts": {
-		"build": "tsup src/index.ts --format cjs,esm --dts --clean",
+		"build": "tsup src/index.ts --format cjs,esm --dts --clean --sourcemap",
 		"dev": "npm run build -- --watch",
 		"lint": "biome check src",
 		"lint:fix": "biome check --write src",
@@ -21,19 +32,18 @@
 		"test:watch": "vitest --typecheck"
 	},
 	"keywords": [
-		"computation",
-		"graph",
-		"engine",
-		"derived",
-		"state",
-		"consistent",
-		"async",
-		"sync",
-		"concurrent",
 		"typescript",
-		"type-safe",
+		"derived-state",
+		"reactive",
+		"computation-graph",
+		"dag",
 		"proxy",
-		"data-compute"
+		"lambda",
+		"async",
+		"batching",
+		"state-management",
+		"selector",
+		"type-safe"
 	],
 	"author": {
 		"name": "Sergei Shmakov",
@@ -46,16 +56,41 @@
 	"bugs": {
 		"url": "https://github.com/sergeyshmakov/data-compute/issues"
 	},
-	"homepage": "https://github.com/sergeyshmakov/data-compute#readme",
+	"homepage": "https://sergeyshmakov.github.io/data-compute/",
 	"release": {
 		"branches": [
 			"main"
+		],
+		"plugins": [
+			"@semantic-release/commit-analyzer",
+			"@semantic-release/release-notes-generator",
+			[
+				"@semantic-release/changelog",
+				{
+					"changelogFile": "CHANGELOG.md"
+				}
+			],
+			"@semantic-release/npm",
+			[
+				"@semantic-release/git",
+				{
+					"assets": [
+						"package.json",
+						"package-lock.json",
+						"CHANGELOG.md"
+					],
+					"message": "chore(release): ${nextRelease.version} [skip ci]\n\n${nextRelease.notes}"
+				}
+			],
+			"@semantic-release/github"
 		]
 	},
 	"devDependencies": {
 		"@biomejs/biome": "2.4.6",
 		"@commitlint/cli": "^20.4.3",
 		"@commitlint/config-conventional": "^20.4.3",
+		"@semantic-release/changelog": "^6.0.3",
+		"@semantic-release/git": "^10.0.1",
 		"husky": "^9.1.7",
 		"semantic-release": "^25.0.3",
 		"tsup": "^8.5.1",

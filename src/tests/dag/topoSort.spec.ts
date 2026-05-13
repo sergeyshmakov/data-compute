@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { topoSort } from "../../dag";
+import { topoSort } from "../../dag/index.js";
 
 describe("topoSort", () => {
 	describe("empty and single node", () => {

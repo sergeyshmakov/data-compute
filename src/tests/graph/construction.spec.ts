@@ -1,11 +1,11 @@
 import { describe, expect, it } from "vitest";
-import { createGraph } from "../../graph";
+import { createGraph } from "../../graph/index.js";
 import type {
 	AbRoot,
 	DepsRoot,
 	ItemsTotalRoot,
 	TraceAbcRoot,
-} from "./test-types";
+} from "./test-types.js";
 
 describe("createGraph construction", () => {
 	describe("sync formulas build correct order", () => {

@@ -4,7 +4,7 @@ import type {
 	DataSourceNode,
 	DeepFormulaMap,
 	RequestDataSourceConfig,
-} from "../types";
+} from "../types.js";
 
 export type InternalNodeType = "formula" | "batch" | "request";
 

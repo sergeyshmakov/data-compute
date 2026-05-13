@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
-import { buildDepsMap, buildReverseDepsMap } from "../../graph/deps-maps";
-import type { FlatNode } from "../../graph/flatten";
-import { flattenGraph } from "../../graph/flatten";
+import { buildDepsMap, buildReverseDepsMap } from "../../graph/deps-maps.js";
+import type { FlatNode } from "../../graph/flatten.js";
+import { flattenGraph } from "../../graph/flatten.js";
 
 function node(
 	path: string,

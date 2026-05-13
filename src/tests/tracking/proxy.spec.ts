@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { dryRunProxy, isProxy, trackingProxy } from "../../tracking/proxy";
+import { dryRunProxy, isProxy, trackingProxy } from "../../tracking/proxy.js";
 
 describe("isProxy", () => {
 	describe("returns true for tracking and dry-run proxies", () => {

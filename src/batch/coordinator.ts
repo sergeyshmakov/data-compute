@@ -3,7 +3,7 @@ import type {
 	BatchEntry,
 	BatchFailure,
 	BatchSuccess,
-} from "../types";
+} from "../types.js";
 
 interface PendingRequest {
 	id: string;

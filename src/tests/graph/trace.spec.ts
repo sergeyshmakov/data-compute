@@ -1,11 +1,11 @@
 import { describe, expect, it } from "vitest";
-import { createGraph } from "../../graph";
+import { createGraph } from "../../graph/index.js";
 import type {
 	TraceAbcRoot,
 	TraceAsyncRoot,
 	TraceSumRoot,
 	TraceXRoot,
-} from "./test-types";
+} from "./test-types.js";
 
 describe("trace", () => {
 	describe("returns steps in order", () => {

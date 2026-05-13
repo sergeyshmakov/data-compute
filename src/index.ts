@@ -1,4 +1,4 @@
-export { createGraph } from "./graph";
+export { createGraph } from "./graph/index.js";
 export type {
 	Awaitable,
 	BatchDataSourceConfig,
@@ -32,5 +32,5 @@ export type {
 	Simplify,
 	StalePolicy,
 	TraceStep,
-} from "./types";
-export { batchRequest, each, eachDataSource, request } from "./types";
+} from "./types.js";
+export { batchRequest, each, eachDataSource, request } from "./types.js";
