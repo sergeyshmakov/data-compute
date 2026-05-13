@@ -1,0 +1,96 @@
+---
+title: Core concepts
+description: How data-compute thinks — nodes, sources, formulas, snapshots.
+---
+
+## Source vs computed fields
+
+A graph has two kinds of fields:
+
+- **Source fields** — values you provide. User input, API responses, props.
+- **Computed fields** — values the graph produces. Each has a formula that reads from source fields or other computed fields.
+
+The graph never owns source field values. You pass them in via `compute(patch)` or `getState()`; the graph hands them back unchanged alongside the fields it derived.
+
+## Formulas
+
+A formula is a pure function from the current state snapshot to a value:
+
+```ts
+const graph = createGraph<Form>({
+  subtotal: (f) => f.quantity * f.unitPrice,
+  tax:      (f) => f.subtotal * f.taxRate,
+  total:    (f) => f.subtotal + f.tax - f.discount,
+});
+```
+
+Formulas have no side effects, no `this`, no implicit reactivity. They run when their inputs change.
+
+## Auto-tracked dependencies
+
+When the graph is created, each formula runs once against a recording **Proxy**. The Proxy intercepts every property read and records the field name. Those reads become the formula's dependency set, computed once and cached.
+
+```ts
+subtotal: (f) => f.quantity * f.unitPrice
+//                 ^^^^^^^^^   ^^^^^^^^^
+//                 Proxy traps these → deps = ["quantity", "unitPrice"]
+```
+
+Consequences:
+
+- **No manual `deps: [...]` arrays.** The graph is built automatically.
+- **Conditional dependencies are supported.** `(f) => f.useMetric ? f.kg * 2.2 : f.lbs` — both branches are recorded.
+- **Renaming a field breaks the formula at compile time.** TypeScript catches it before runtime does.
+
+## Topological execution order
+
+Once dependencies are known, the graph runs formulas in topological order: dependencies before dependents. You can define formulas in any order — `total` before `subtotal` is fine.
+
+```ts
+graph.order;   // → ["subtotal", "tax", "total"]
+graph.deps((g) => g.tax);          // → ["subtotal", "taxRate"]
+graph.dependents((g) => g.subtotal); // → ["tax", "total"]
+```
+
+## The compute call
+
+```ts
+const result = await graph.compute({ quantity: 5 });
+```
+
+Mechanically:
+
+1. **Receive a patch.** `compute()` accepts `DeepPartial<Root>`. You pass only what changed.
+2. **Merge with current state.** If `getState` is configured, the graph reads it and merges in the patch. Prevents stale closures when inputs change between the call and the microtask flush.
+3. **Build a snapshot.** Formulas see one immutable view of state for the duration of one `compute()` cycle.
+4. **Run formulas in topological order.** Each formula reads from the snapshot, writes its output into the result patch.
+5. **Return a granular patch.** Only the fields that actually changed appear in the result. Same shape as root.
+
+## Snapshot semantics
+
+A formula sees one consistent snapshot of state, even across array iterations. This eliminates the "mixed-state" class of bugs.
+
+```ts
+total: (f) => {
+  // All reads of f.items, f.taxRate, etc. see the same state-as-of-cycle-start.
+  // No async edit, no concurrent compute(), no surprise mid-formula change.
+  return (f.items ?? []).reduce((sum, item) => sum + item.price, 0);
+}
+```
+
+See [Snapshot semantics](/data-compute/guides/snapshot-semantics/) for details.
+
+## Inspection
+
+A `Graph` exposes its structure as data:
+
+```ts
+graph.nodes;          // computed field paths
+graph.sources;        // source field paths
+graph.order;          // topological execution order
+graph.deps(accessor); // direct dependencies of a node
+graph.dependents(accessor); // nodes that depend on a field
+graph.toMermaid();    // Mermaid diagram source
+```
+
+This is part of the design: the graph is data, not opaque closures. You can render it, audit it, and write tests against its shape.

@@ -1,0 +1,110 @@
+---
+title: Zustand integration
+description: Wiring data-compute into a Zustand store.
+---
+
+## Pattern
+
+Define a Zustand store. The graph reads it via `getState`, writes back via `set`.
+
+```ts
+import { create } from "zustand";
+import { createGraph } from "data-compute";
+
+interface OrderForm {
+  quantity: number;
+  unitPrice: number;
+  taxRate: number;
+  discount: number;
+  subtotal: number;
+  tax: number;
+  total: number;
+}
+
+const useOrderStore = create<OrderForm & { update: (patch: Partial<OrderForm>) => void }>(
+  (set, get) => {
+    const graph = createGraph<OrderForm>(
+      {
+        subtotal: (f) => f.quantity * f.unitPrice,
+        tax:      (f) => f.subtotal * f.taxRate,
+        total:    (f) => f.subtotal + f.tax - f.discount,
+      },
+      undefined,
+      {
+        getState: () => get(),
+        setState: (patch) => set(patch),
+      },
+    );
+
+    return {
+      quantity: 1,
+      unitPrice: 20,
+      taxRate: 0.1,
+      discount: 0,
+      subtotal: 0,
+      tax: 0,
+      total: 0,
+      update: (patch) => graph.compute(patch),
+    };
+  },
+);
+```
+
+## Usage
+
+```tsx
+function QuantityInput() {
+  const quantity = useOrderStore((s) => s.quantity);
+  const update = useOrderStore((s) => s.update);
+
+  return (
+    <input
+      type="number"
+      value={quantity}
+      onChange={(e) => update({ quantity: Number(e.target.value) })}
+    />
+  );
+}
+
+function Receipt() {
+  const total = useOrderStore((s) => s.total);
+  return <div>Total: {total}</div>;
+}
+```
+
+The store update triggers a re-render only for components observing the fields that actually changed — Zustand's normal slice-selector behavior.
+
+## Variant — compute as an explicit action
+
+If you don't want the graph wired into the store's update path, expose it as an action:
+
+```ts
+const useOrderStore = create<OrderForm>((set, get) => ({
+  quantity: 1,
+  unitPrice: 20,
+  taxRate: 0.1,
+  discount: 0,
+  subtotal: 0,
+  tax: 0,
+  total: 0,
+}));
+
+const graph = createGraph<OrderForm>(
+  {
+    subtotal: (f) => f.quantity * f.unitPrice,
+    tax:      (f) => f.subtotal * f.taxRate,
+    total:    (f) => f.subtotal + f.tax - f.discount,
+  },
+  undefined,
+  {
+    getState: () => useOrderStore.getState(),
+    setState: (patch) => useOrderStore.setState(patch),
+  },
+);
+
+export function updateOrder(patch: Partial<OrderForm>) {
+  graph.compute(patch);
+}
+```
+
+Either pattern works — the difference is whether the graph is a hidden store internal or an explicit module export.

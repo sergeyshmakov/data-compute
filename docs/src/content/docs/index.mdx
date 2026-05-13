@@ -1,0 +1,108 @@
+---
+title: data-compute
+description: Typed reactive derived state for TypeScript — with async-aware nodes.
+template: splash
+hero:
+  title: Typed Reactive Derived State, With Async-Aware Nodes
+  tagline: Build a typed DAG of formulas. Mix sync calculations with async data sources. Get atomic patches when anything changes.
+  actions:
+    - text: Quick Start
+      link: /data-compute/getting-started/quick-start/
+      icon: right-arrow
+      variant: primary
+    - text: View on GitHub
+      link: https://github.com/sergeyshmakov/data-compute
+      icon: external
+      variant: minimal
+    - text: View on npm
+      link: https://www.npmjs.com/package/data-compute
+      icon: external
+      variant: minimal
+---
+
+import { Card, CardGrid } from "@astrojs/starlight/components";
+
+## Before / after
+
+```ts
+// Before — derived state scattered across useMemo, useEffect, manual coordination
+const subtotal = useMemo(() => quantity * basePrice, [quantity, basePrice]);
+const { data: pricing } = useQuery(["pricing", productId]);
+const finalPrice = useMemo(
+  () => (pricing?.adjustedPrice ?? 0) * quantity,
+  [pricing, quantity],
+);
+const total = useMemo(() => finalPrice + tax, [finalPrice, tax]);
+// Race conditions, mixed-state UI, manual dep arrays
+```
+
+```ts
+// After — one typed DAG, atomic patches, no manual deps
+const graph = createGraph<Form>({
+  subtotal:   (f) => f.quantity * f.basePrice,
+  finalPrice: (f) => (f.pricing?.adjustedPrice ?? 0) * f.quantity,
+  total:      (f) => f.finalPrice + f.tax,
+});
+
+const result = await graph.compute({ quantity, basePrice, pricing });
+```
+
+## What it is
+
+A TypeScript-first computation graph engine. Define each derived value as a pure formula; `data-compute` auto-tracks dependencies via Proxy, builds the DAG, and runs it in topological order. Async nodes participate in the same graph, with snapshot consistency and stale protection.
+
+- Plain objects in, plain objects out — no observables, no signals, no class wrappers
+- Sync formulas and async data sources in one typed graph
+- Atomic patch output — only changed fields, same shape as root
+- Framework-agnostic — works with MobX, Zustand, React, or standalone
+- Composes with TanStack Query rather than replacing it
+
+## Feature areas
+
+<CardGrid>
+  <Card title="Core graph" icon="document">
+    Pure formulas, auto-tracked dependencies via Proxy, topological execution.
+
+    [Core concepts](/data-compute/guides/core-concepts/)
+  </Card>
+  <Card title="Async & batching" icon="rocket">
+    `request` and `batchRequest` data sources, stale protection, microtask coalescing.
+
+    [Async and batching](/data-compute/guides/async-and-batching/)
+  </Card>
+  <Card title="Granular updates" icon="puzzle">
+    Pass partial patches, receive partial patches. No full snapshots in or out.
+
+    [Granular updates](/data-compute/guides/granular-updates/)
+  </Card>
+  <Card title="Integrations" icon="setting">
+    Works with TanStack Query, MobX, Zustand, plain React state.
+
+    [TanStack Query](/data-compute/integrations/tanstack-query/)
+  </Card>
+</CardGrid>
+
+## Next steps
+
+<CardGrid>
+  <Card title="Install" icon="download">
+    Add the package and verify the setup.
+
+    [Installation](/data-compute/getting-started/installation/)
+  </Card>
+  <Card title="Quick start" icon="right-arrow">
+    A working example in under five minutes.
+
+    [Quick Start](/data-compute/getting-started/quick-start/)
+  </Card>
+  <Card title="API cheatsheet" icon="open-book">
+    Every method at a glance.
+
+    [API Cheatsheet](/data-compute/reference/api-cheatsheet/)
+  </Card>
+  <Card title="Types reference" icon="information">
+    `Graph`, `DataSource`, `DeepPartial`, and more.
+
+    [Types](/data-compute/reference/types/)
+  </Card>
+</CardGrid>

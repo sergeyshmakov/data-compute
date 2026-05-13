@@ -1,0 +1,64 @@
+---
+title: API cheatsheet
+description: Every public method and helper at a glance.
+---
+
+## Graph construction
+
+| Symbol | Purpose |
+|---|---|
+| `createGraph<T>(formulas, dataSources?, options?)` | Builds a graph. Dependencies extracted statically. |
+| `each(mapping)` | Per-item formula map for arrays. |
+| `request(deps, config)` | Async data source — executes immediately. |
+| `batchRequest(deps, config)` | Async data source — coalesces inputs in a microtask before sending one batched query. |
+
+## Graph execution
+
+| Symbol | Purpose |
+|---|---|
+| `graph.compute(patch)` | Runs one cycle. Accepts a granular patch. Returns `Promise<DeepPartial<T>>`. |
+
+## Inspection
+
+| Symbol | Purpose |
+|---|---|
+| `graph.nodes` | Computed node paths. |
+| `graph.sources` | Source field paths. |
+| `graph.order` | Topological execution order. |
+| `graph.deps(accessor)` | Direct dependencies of a node. |
+| `graph.dependents(accessor)` | Nodes that depend on a field. |
+| `graph.toMermaid()` | Mermaid diagram source for the graph. |
+
+## Status
+
+| Symbol | Purpose |
+|---|---|
+| `graph.computeStatus(accessor)` | `"ready" \| "pending" \| "stale" \| "error"` for a node. |
+| `graph.computeResult(accessor)` | `{ value, status }` for a node. |
+| `graph.status(key)` | Path-based status (alternative to `computeStatus`). |
+| `graph.snapshot(key)` | Path-based snapshot (alternative to `computeResult`). |
+| `graph.trace(input)` | Execution trace for debugging. |
+
+## Options
+
+| Option | Purpose |
+|---|---|
+| `stalePolicy` | `"discard"` or `"discard-and-retry"` per data source. |
+| `cyclic` | `"error"` (default) or `"freeze"` — graph-level cycle handling. |
+| `consistency` | v1: only `"hold-until-ready"`. |
+| `getState` | Called before each cycle to read current state. Prevents stale closures. |
+| `setState` | Called after each cycle with the granular patch. Skipped for stale results. |
+| `onError` | Called when a node evaluation fails. |
+
+## Imports
+
+```ts
+import {
+  createGraph,
+  each,
+  request,
+  batchRequest,
+  type Graph,
+  type DataSource,
+} from "data-compute";
+```

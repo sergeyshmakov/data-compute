@@ -1,0 +1,139 @@
+---
+title: Async and batching
+description: Async data sources, request batching, stale protection, and status.
+---
+
+## Two data source kinds
+
+| Helper | When to use |
+|---|---|
+| `request(deps, config)` | One async lookup; executes immediately when its inputs are ready |
+| `batchRequest(deps, config)` | Backend expects coalesced requests — N inputs become one POST |
+
+Both produce nodes that participate in the same DAG as sync formulas. Downstream formulas wait for their values automatically.
+
+## `request` — single, immediate
+
+```ts
+import { createGraph, request } from "data-compute";
+
+const graph = createGraph<Form>(
+  {
+    tax: (f) => f.subtotal * (f.taxRate ?? 0),
+  },
+  {
+    taxRate: request(
+      (f) => ({ productId: f.productId }),
+      { query: async ({ productId }) => fetchTaxRate(productId) },
+    ),
+  },
+);
+```
+
+`taxRate` is computed asynchronously the first time it's needed. Downstream formulas (`tax`) become async automatically.
+
+## `batchRequest` — coalesced
+
+```ts
+import { createGraph, batchRequest } from "data-compute";
+
+const graph = createGraph<Form>(
+  { /* formulas */ },
+  {
+    pricing: batchRequest(
+      (f) => ({ productId: f.productId, quantity: f.quantity }),
+      {
+        query: async (entries) => {
+          const res = await fetch("/api/pricing/batch", {
+            method: "POST",
+            body: JSON.stringify(entries.map((e) => e.request)),
+          });
+          const data = await res.json();
+          return entries.map((e, i) => ({ id: e.id, response: data[i] }));
+        },
+      },
+    ),
+  },
+);
+```
+
+Multiple `compute()` calls within one microtask have their `pricing` lookups coalesced into a single batched query.
+
+## Stale protection
+
+When source inputs change while a request is in flight, the result of that request is stale by the time it arrives. `stalePolicy` controls what happens.
+
+| Policy | Behavior |
+|---|---|
+| `"discard"` | The stale response is dropped. No retry. The node stays `pending` until a new cycle triggers a fresh request. |
+| `"discard-and-retry"` | The stale response is dropped, then the graph immediately re-issues the request with the latest inputs. |
+
+```ts
+taxRate: request(deps, {
+  query: fetchTaxRate,
+  stalePolicy: "discard-and-retry",
+});
+```
+
+`discard-and-retry` is what eliminates the **new-count × old-price** class of bugs.
+
+## Status
+
+Each node has a status. Use it to drive spinners, disabled buttons, or stale-value styling.
+
+```ts
+graph.computeStatus((g) => g.taxRate);
+// → "ready" | "pending" | "stale" | "error"
+
+graph.computeResult((g) => g.taxRate);
+// → { value: 0.1, status: "ready" }
+```
+
+Status is per-node and per-cycle. A node is `pending` while its async dependency is in flight; downstream nodes are `pending` until all their dependencies are `ready`.
+
+## Microtask batching
+
+Multiple `compute()` calls within the same microtask are coalesced into one DAG execution. Useful when many components trigger updates in the same tick.
+
+```ts
+// Three components fire compute in the same tick
+graph.compute({ quantity: 5 });
+graph.compute({ basePrice: 20 });
+graph.compute({ taxRate: 0.1 });
+
+// → one DAG execution, one batched query for pricing
+```
+
+The coalesced patch is the merge of all three calls. The graph runs once.
+
+## Async + sync in one graph
+
+You can mix sync formulas, async data sources, and formulas that depend on both:
+
+```ts
+const graph = createGraph<Order>(
+  {
+    // sync formula
+    subtotal: (f) => f.quantity * f.basePrice,
+    // mixed sync/async — depends on subtotal (sync) and pricing (async)
+    finalPrice: (f) => f.subtotal * (f.pricing?.discount ?? 1),
+    // sync downstream of async
+    total: (f) => f.finalPrice + f.tax,
+  },
+  {
+    pricing: request(/* ... */),
+  },
+);
+```
+
+Synchronous subgraphs that don't touch async nodes execute synchronously — no `await` tax. Async nodes only force `Promise` semantics on the formulas downstream of them.
+
+## When to use what
+
+| Scenario | Recommended |
+|---|---|
+| Single API call per cycle | `request` |
+| Many components triggering the same lookup | `batchRequest` |
+| Backend offers a bulk endpoint | `batchRequest` |
+| Inputs change during the in-flight request | `stalePolicy: "discard-and-retry"` |
+| Status-aware UI (spinners, disabled buttons) | `graph.computeStatus` |

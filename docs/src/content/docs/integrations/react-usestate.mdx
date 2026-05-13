@@ -1,0 +1,79 @@
+---
+title: React useState integration
+description: Using data-compute with plain React state — no state manager required.
+---
+
+## Pattern — the `useComputed` hook
+
+```ts
+import { useCallback, useEffect, useState } from "react";
+import { createGraph, type Graph } from "data-compute";
+
+export function useComputed<T>(graph: Graph<T>, initial: T) {
+  const [state, setState] = useState<T>(initial);
+
+  useEffect(() => {
+    graph.compute(initial).then(setState);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  const update = useCallback(
+    (patch: Partial<T>) => {
+      setState((prev) => {
+        const next = { ...prev, ...patch };
+        void graph.compute(next).then(setState);
+        return next;
+      });
+    },
+    [graph],
+  );
+
+  return [state, update] as const;
+}
+```
+
+## Usage
+
+```tsx
+const graph = createGraph<OrderForm>({
+  subtotal: (f) => f.quantity * f.unitPrice,
+  tax:      (f) => f.subtotal * f.taxRate,
+  total:    (f) => f.subtotal + f.tax - f.discount,
+});
+
+function OrderPage() {
+  const [order, updateOrder] = useComputed(graph, {
+    quantity: 1, unitPrice: 20, taxRate: 0.1, discount: 0,
+    subtotal: 0, tax: 0, total: 0,
+  });
+
+  return (
+    <div>
+      <input
+        type="number"
+        value={order.quantity}
+        onChange={(e) => updateOrder({ quantity: Number(e.target.value) })}
+      />
+      <div>Subtotal: {order.subtotal}</div>
+      <div>Tax: {order.tax}</div>
+      <div>Total: {order.total}</div>
+    </div>
+  );
+}
+```
+
+## What the hook does
+
+1. **Initial compute on mount** — runs the graph once against the initial state so derived fields are populated.
+2. **Optimistic update on input** — the input field stays responsive: the new value lands in state immediately, then the async compute reconciles derived fields.
+3. **No external store** — for small forms or page-local state, this is enough. No Zustand, no MobX, no context.
+
+## When this is enough
+
+Plain `useState` + `useComputed` is the right fit when:
+
+- The state is **local to one page or component tree**.
+- You have **no async data sources**, or async sources tolerate the "one cycle per input change" cadence.
+- You don't need **derived selectors** across multiple components — `useComputed` co-locates state with the form.
+
+For app-wide derived state or multi-page consistency, use Zustand or MobX integrations instead.

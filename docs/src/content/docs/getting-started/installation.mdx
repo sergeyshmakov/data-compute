@@ -1,0 +1,57 @@
+---
+title: Installation
+description: Install data-compute and configure TypeScript.
+---
+
+## Install
+
+```bash
+npm install data-compute
+```
+
+## Requirements
+
+- Node `>=20`
+- TypeScript `>=5.0`
+
+## TypeScript configuration
+
+No special flags are required. A minimal `tsconfig.json` that works:
+
+```json
+{
+  "compilerOptions": {
+    "target": "ES2020",
+    "module": "ESNext",
+    "moduleResolution": "Bundler",
+    "strict": true
+  }
+}
+```
+
+`strict: true` is recommended — it enables full inference through formula parameters. Without it, derived field types may resolve to `unknown` instead of the declared type.
+
+## Verify the install
+
+```ts
+import { createGraph } from "data-compute";
+
+interface Form {
+  quantity: number;
+  unitPrice: number;
+  subtotal: number;
+}
+
+const graph = createGraph<Form>({
+  subtotal: (f) => f.quantity * f.unitPrice,
+});
+
+const result = await graph.compute({ quantity: 2, unitPrice: 10 });
+console.log(result.subtotal); // 20
+```
+
+If this compiles and logs `20`, the package is correctly installed.
+
+## Next
+
+- [Quick Start](/data-compute/getting-started/quick-start/) — a complete working example.
