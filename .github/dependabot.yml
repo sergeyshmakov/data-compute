@@ -7,10 +7,11 @@ updates:
       interval: "monthly"
       time: "06:00"
       timezone: "UTC"
+    allow:
+      - dependency-type: "direct"
     open-pull-requests-limit: 5
     labels:
       - "dependencies"
-    dependency-type: "direct"
     groups:
       npm-production:
         dependency-type: "production"
@@ -26,10 +27,11 @@ updates:
       interval: "monthly"
       time: "06:00"
       timezone: "UTC"
+    allow:
+      - dependency-type: "direct"
     open-pull-requests-limit: 1
     labels:
       - "dependencies"
-    dependency-type: "direct"
     groups:
       docs-dependencies:
         patterns: ["*"]
