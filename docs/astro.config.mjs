@@ -4,7 +4,7 @@ import { defineConfig } from "astro/config";
 const REPO_URL = "https://github.com/sergeyshmakov/data-compute";
 
 export default defineConfig({
-	site: "https://sergeyshmakov.github.io/data-compute",
+	site: "https://sergeyshmakov.github.io",
 	base: "/data-compute",
 	integrations: [
 		starlight({
