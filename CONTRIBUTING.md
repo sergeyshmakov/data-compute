@@ -1,51 +1,47 @@
-# Contributing to `data-compute`
+# Contributing
 
-First off, thank you for being here! 🎉 
+## Before you start
 
-I'm a solo maintainer working on this project in my free time, and I am thrilled that you want to help make it better. To keep things moving smoothly and respect everyone's time, I just have a few simple guidelines.
+**Bugs and typos:** open a pull request directly.
 
-## 💡 The Golden Rule: Let's talk first!
+**New features and significant changes:** open an issue first. Features need to fit the scope of the project and use an approach we agree on before significant implementation work begins.
 
-**Bugs & Typos:** Did you find a bug, a typo, or something broken? Feel free to open a Pull Request directly! No need to ask.
+## Local development
 
-**New Features & Big Changes:** Before you spend your valuable time writing code for a new feature, **please open an Issue first to discuss it.** 
-Why? Because I want to make sure your idea fits the vision of the project, doesn't duplicate ongoing work, and uses an architecture we agree on. I would hate to reject a massive PR that you spent hours on just because we didn't chat first!
+```bash
+git clone https://github.com/sergeyshmakov/data-compute.git
+cd data-compute
+npm ci
+npm run dev          # watch mode — rebuilds on save
+npm test             # run tests and type checks
+```
 
-## 🛠️ Local Development
+## Code style
 
-Setting up the project is super simple. We don't have a massive web of tools—just install and build!
+[Biome](https://biomejs.dev/) handles formatting and linting. The pre-commit hook runs automatically on `git commit`. To run it manually:
 
-1. **Fork & Clone** the repository.
-2. **Install dependencies:**
-   ```bash
-   npm ci
-   ```
-3. **Run the dev watcher:**
-   ```bash
-   npm run dev
-   ```
-   *This uses `tsup` to instantly rebuild the MCP server whenever you save a file.*
-
-## 🎨 Code Style (Zero Config!)
-
-You don't need to configure your editor, set up ESLint, or worry about formatting rules. We use **Biome**.
-
-Just write your code naturally. When you are ready to commit, our Husky pre-commit hook will automatically format your files and fix any basic linting errors in milliseconds. 
-
-If you want to run it manually before committing:
 ```bash
 npm run lint:fix
 ```
 
-## 📦 Committing & Publishing
+## Commits
 
-We use automated releases, which means your commit messages dictate the version numbers and the changelog. 
+This project uses [Conventional Commits](https://www.conventionalcommits.org/). The commit prefix determines the version bump:
 
-When you run `git commit`, you must use **Conventional Commits**:
-* `feat: added a new tool` (Triggers a Minor release, e.g., 1.1.0)
-* `fix: resolved crash on startup` (Triggers a Patch release, e.g., 1.0.1)
-* `docs: updated readme` (No release triggered)
+| Prefix | Release |
+|--------|---------|
+| `feat:` | Minor (0.2.0) |
+| `fix:` | Patch (0.1.1) |
+| `docs:`, `chore:`, `test:` | No release |
 
-*(Don't worry, if you format it wrong, the terminal will kindly reject the commit and ask you to fix it!)*
+Breaking changes use `feat!:` or a `BREAKING CHANGE:` footer in the commit body.
 
-Once your PR is merged into `main`, GitHub Actions will automatically compile the code, write the release notes, and publish the new version to NPM. You don't need to bump any version numbers in `package.json`.
+The commit message format is validated on commit. If the format is wrong, the commit is rejected with a helpful message.
+
+## Release
+
+Merging to `main` triggers `semantic-release` — it determines the version from commit history, publishes to npm, and creates a GitHub release. No manual version bumps needed.
+
+## Code of Conduct
+
+By participating you agree to abide by the [Code of Conduct](.github/CODE_OF_CONDUCT.md).
