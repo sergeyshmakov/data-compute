@@ -19,7 +19,8 @@
 	},
 	"sideEffects": false,
 	"files": [
-		"dist"
+		"dist",
+		"CHANGELOG.md"
 	],
 	"scripts": {
 		"build": "tsup src/index.ts --format cjs,esm --dts --clean --sourcemap",

@@ -40,7 +40,13 @@ The commit message format is validated on commit. If the format is wrong, the co
 
 ## Release
 
-Merging to `main` triggers `semantic-release` — it determines the version from commit history, publishes to npm, and creates a GitHub release. No manual version bumps needed.
+Merging to `main` triggers the publish workflow.
+
+The first release is published manually from `package.json` so the package starts in the 0.x line instead of semantic-release's default first release of `1.0.0`. Publish the current package version (`0.1.0`) first. On the next workflow run, CI verifies that `data-compute@0.1.0` exists on npm and creates the matching `v0.1.0` tag.
+
+The npm package should be configured for trusted publishing from `.github/workflows/publish.yml`; the workflow has `id-token: write` permission for npm provenance.
+
+After that tag exists, `semantic-release` takes over: it determines future versions from commit history, updates `CHANGELOG.md`, publishes to npm, commits the changelog/version metadata, and creates GitHub releases. No manual version bumps or changelog edits are needed after the bootstrap.
 
 ## Code of Conduct
 

@@ -3,6 +3,7 @@ on:
   push:
     branches:
       - main
+  workflow_dispatch:
 
 jobs:
   publish:
@@ -33,7 +34,51 @@ jobs:
       - name: Run Tests
         run: npm run test
 
+      - name: Detect Existing Release Tags
+        id: release_tags
+        shell: bash
+        run: |
+          if git tag --list 'v[0-9]*' | grep -q .; then
+            echo "bootstrapped=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "bootstrapped=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Bootstrap First 0.x Tag
+        if: steps.release_tags.outputs.bootstrapped == 'false'
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          VERSION="$(node -p "require('./package.json').version")"
+          PACKAGE_NAME="$(node -p "require('./package.json').name")"
+          TAG="v${VERSION}"
+
+          if [[ "${VERSION}" == 1.* ]]; then
+            echo "Refusing to bootstrap ${PACKAGE_NAME}@${VERSION}; initial release must stay in 0.x."
+            exit 1
+          fi
+
+          if npm view "${PACKAGE_NAME}@${VERSION}" version >/dev/null 2>&1; then
+            PUBLISHED_REPOSITORY="$(npm view "${PACKAGE_NAME}@${VERSION}" repository.url 2>/dev/null || true)"
+            if [[ "${PUBLISHED_REPOSITORY}" != *"${GITHUB_REPOSITORY}"* ]]; then
+              echo "${PACKAGE_NAME}@${VERSION} already exists on npm but does not point to ${GITHUB_REPOSITORY}; refusing to create ${TAG}."
+              exit 1
+            fi
+
+            echo "${PACKAGE_NAME}@${VERSION} exists on npm; creating ${TAG} so semantic-release continues from 0.x."
+          else
+            echo "${PACKAGE_NAME}@${VERSION} does not exist on npm yet. Publish it manually first, then rerun this workflow to create ${TAG}."
+            exit 1
+          fi
+
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git tag -a "${TAG}" -m "${TAG}"
+          git push origin "${TAG}"
+
       - name: Semantic Release
+        if: steps.release_tags.outputs.bootstrapped == 'true'
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           NPM_CONFIG_PROVENANCE: true
