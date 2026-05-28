@@ -275,7 +275,6 @@ export type CyclicMode = "error";
 
 /**
  * Interceptor for transforming or validating node values.
- * Implementation deferred; type stub for v1.
  */
 export type Interceptor<Root> = (
 	node: keyof Root,
@@ -329,7 +328,6 @@ export interface GraphOptions<
 	readonly requests?: RequestHandlers<Requests>;
 	/**
 	 * Interceptors for transforming or validating node values.
-	 * Implementation deferred; type stub for v1.
 	 */
 	readonly interceptors?: readonly Interceptor<unknown>[];
 	/**

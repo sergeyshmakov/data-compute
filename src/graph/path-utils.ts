@@ -4,6 +4,16 @@ export interface RuntimeExpansion {
 	item: unknown;
 }
 
+const unsafePathSegments = new Set(["__proto__", "constructor", "prototype"]);
+
+function assertSafePath(path: string): void {
+	for (const segment of path.split(".")) {
+		if (unsafePathSegments.has(segment)) {
+			throw new Error(`Unsafe path segment "${segment}" in path "${path}".`);
+		}
+	}
+}
+
 export function getByPath(obj: unknown, path: string): unknown {
 	if (path === "") return obj;
 	const parts = path.split(".");
@@ -20,6 +30,7 @@ export function setByPath(
 	path: string,
 	value: unknown,
 ): void {
+	assertSafePath(path);
 	const parts = path.split(".");
 	let curr: Record<string, unknown> = obj;
 	for (let i = 0; i < parts.length - 1; i++) {

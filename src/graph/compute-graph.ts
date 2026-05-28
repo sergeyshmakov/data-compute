@@ -202,7 +202,12 @@ class ComputeGraph<Root> implements Graph<Root> {
 					break;
 				}
 
-				this.applyEachOutcomes(templatePath, outcomes, state, granularPatch);
+				await this.applyEachOutcomes(
+					templatePath,
+					outcomes,
+					state,
+					granularPatch,
+				);
 			} else {
 				try {
 					const result = await this.executeNode(
@@ -220,9 +225,14 @@ class ComputeGraph<Root> implements Graph<Root> {
 						break;
 					}
 
-					setByPath(state, node.path, result);
-					setByPath(granularPatch, node.path, result);
-					this.setNodeReady(node.path, result);
+					const interceptedResult = await this.applyInterceptors(
+						node.path,
+						result,
+						state,
+					);
+					setByPath(state, node.path, interceptedResult);
+					setByPath(granularPatch, node.path, interceptedResult);
+					this.setNodeReady(node.path, interceptedResult);
 				} catch (cause) {
 					this.setNodeError(node.path, cause);
 					this.options.onError?.({ key: node.path, cause });
@@ -364,20 +374,61 @@ class ComputeGraph<Root> implements Graph<Root> {
 		return undefined;
 	}
 
-	private applyEachOutcomes(
+	private applyInterceptors(
+		nodePath: string,
+		value: unknown,
+		state: Record<string, unknown>,
+	): unknown {
+		const interceptors = this.options.interceptors;
+		if (!interceptors?.length) return value;
+
+		const snapshot = deepFreezeSnapshot(cloneForCompute(state));
+		const dispatch = (index: number, nextValue: unknown): unknown => {
+			const interceptor = interceptors[index];
+			if (!interceptor) return nextValue;
+
+			let nextCalled = false;
+			return interceptor(nodePath, nextValue, snapshot, (value) => {
+				if (nextCalled) {
+					throw new Error(
+						`Interceptor for "${nodePath}" called next() multiple times.`,
+					);
+				}
+				nextCalled = true;
+				return dispatch(index + 1, value);
+			});
+		};
+
+		return dispatch(0, value);
+	}
+
+	private async applyEachOutcomes(
 		templatePath: string,
 		outcomes: readonly RuntimeOutcome[],
 		state: Record<string, unknown>,
 		granularPatch: Record<string, unknown>,
-	): void {
+	): Promise<void> {
 		const successes: unknown[] = [];
 		let firstError: unknown;
 
 		for (const outcome of outcomes) {
 			if (outcome.status === "ready") {
-				successes.push(outcome.result);
-				setByPath(state, outcome.runtimePath, outcome.result);
-				setByPath(granularPatch, outcome.runtimePath, outcome.result);
+				try {
+					const interceptedResult = await this.applyInterceptors(
+						outcome.runtimePath,
+						outcome.result,
+						state,
+					);
+					successes.push(interceptedResult);
+					setByPath(state, outcome.runtimePath, interceptedResult);
+					setByPath(granularPatch, outcome.runtimePath, interceptedResult);
+				} catch (cause) {
+					if (firstError === undefined) firstError = cause;
+					this.options.onError?.({
+						key: outcome.runtimePath,
+						cause,
+					});
+				}
 			} else {
 				if (firstError === undefined) firstError = outcome.cause;
 				this.options.onError?.({

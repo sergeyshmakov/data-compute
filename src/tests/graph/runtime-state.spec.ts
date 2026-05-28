@@ -140,4 +140,47 @@ describe("runtime state snapshots", () => {
 			fnValue: "callable",
 		});
 	});
+
+	it("prevents Map and Set mutations inside frozen snapshots", async () => {
+		interface Root {
+			map: Map<string, number>;
+			set: Set<string>;
+			mapMutated: boolean;
+			setMutated: boolean;
+		}
+		const graph = createGraph<Root>(
+			{
+				mapMutated: (f) => {
+					try {
+						f.map.set("b", 2);
+					} catch {
+						// Frozen collection snapshots reject mutating methods.
+					}
+					return f.map.has("b");
+				},
+				setMutated: (f) => {
+					try {
+						f.set.add("y");
+					} catch {
+						// Frozen collection snapshots reject mutating methods.
+					}
+					return f.set.has("y");
+				},
+			},
+			undefined,
+			{
+				getState: () => ({
+					map: new Map([["a", 1]]),
+					set: new Set(["x"]),
+					mapMutated: false,
+					setMutated: false,
+				}),
+			},
+		);
+
+		await expect(graph.compute({})).resolves.toMatchObject({
+			mapMutated: false,
+			setMutated: false,
+		});
+	});
 });

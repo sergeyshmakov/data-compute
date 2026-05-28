@@ -9,6 +9,30 @@ function isPlainObject(item: unknown): item is Record<string, unknown> {
 	);
 }
 
+function throwFrozenSnapshotMutation(): never {
+	throw new TypeError("Cannot mutate frozen snapshot.");
+}
+
+function disableMapMutators(value: Map<unknown, unknown>): void {
+	for (const method of ["set", "delete", "clear"] as const) {
+		Object.defineProperty(value, method, {
+			value: throwFrozenSnapshotMutation,
+			writable: false,
+			configurable: false,
+		});
+	}
+}
+
+function disableSetMutators(value: Set<unknown>): void {
+	for (const method of ["add", "delete", "clear"] as const) {
+		Object.defineProperty(value, method, {
+			value: throwFrozenSnapshotMutation,
+			writable: false,
+			configurable: false,
+		});
+	}
+}
+
 function cloneFallback(
 	value: unknown,
 	seen = new WeakMap<object, unknown>(),
@@ -137,8 +161,10 @@ export function deepFreezeSnapshot<T>(
 			deepFreezeSnapshot(key, seen);
 			deepFreezeSnapshot(mapValue, seen);
 		}
+		disableMapMutators(value);
 	} else if (value instanceof Set) {
 		for (const setValue of value) deepFreezeSnapshot(setValue, seen);
+		disableSetMutators(value);
 	} else {
 		for (const objectValue of Object.values(value as Record<string, unknown>)) {
 			deepFreezeSnapshot(objectValue, seen);

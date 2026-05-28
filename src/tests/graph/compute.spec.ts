@@ -214,6 +214,66 @@ describe("compute", () => {
 		});
 	});
 
+	describe("interceptors", () => {
+		it("applies transformed values before storing them in state and patches", async () => {
+			interface Root {
+				value: number;
+				clamped: number;
+				dependent: number;
+			}
+			const graph = createGraph<Root>(
+				{
+					clamped: (f) => f.value * 10,
+					dependent: (f) => f.clamped + 1,
+				},
+				undefined,
+				{
+					interceptors: [
+						(path, value, _state, next) =>
+							next(path === "clamped" ? Math.min(value as number, 25) : value),
+					],
+				},
+			);
+
+			const result = await graph.compute({ value: 3 });
+
+			expect(result.clamped).toBe(25);
+			expect(result.dependent).toBe(26);
+			expect(graph.computeResult((x) => x.clamped).value).toBe(25);
+		});
+
+		it("applies transformed data source values before storing them", async () => {
+			interface Root {
+				apiResult: { ok: boolean; secret?: string };
+			}
+			const handler = vi.fn().mockResolvedValue({ ok: true, secret: "token" });
+			const graph = createGraph<Root>(
+				{},
+				{
+					apiResult: request(() => ({ id: 1 }), {
+						query: handler as unknown as (req: {
+							id: number;
+						}) => Promise<{ ok: boolean; secret?: string }>,
+					}),
+				},
+				{
+					interceptors: [
+						(path, value, _state, next) =>
+							next(
+								path === "apiResult"
+									? { ok: (value as { ok: boolean }).ok }
+									: value,
+							),
+					],
+				},
+			);
+
+			await expect(graph.compute({})).resolves.toEqual({
+				apiResult: { ok: true },
+			});
+		});
+	});
+
 	describe("onError", () => {
 		it("called when formula throws with key and cause", async () => {
 			const onError = vi.fn();
