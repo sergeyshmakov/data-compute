@@ -46,6 +46,123 @@ describe("stalePolicy discard", () => {
 		expect(result2.fast).toBe("fast");
 		expect(result2.slow).toBe("slow");
 	});
+
+	it("does not commit stale normal-node results after awaited interceptors", async () => {
+		interface Root {
+			input: number;
+			doubled: number;
+		}
+
+		let releaseOld!: () => void;
+		const store: Root = { input: 0, doubled: 0 };
+		const setState = vi.fn((patch: DeepPartial<Root>) => {
+			Object.assign(store, patch);
+		});
+
+		const graph = createGraph<Root>(
+			{
+				doubled: (f) => f.input * 2,
+			},
+			undefined,
+			{
+				stalePolicy: "discard",
+				getState: () => store,
+				setState,
+				interceptors: [
+					async (path, value, state, next) => {
+						if (path === "doubled" && (state as Root).input === 1) {
+							await new Promise<void>((resolve) => {
+								releaseOld = resolve;
+							});
+						}
+						return next(value);
+					},
+				],
+			},
+		);
+
+		const first = graph.compute({ input: 1 });
+		await new Promise((resolve) => setTimeout(resolve, 0));
+		const second = graph.compute({ input: 2 });
+
+		await expect(second).resolves.toEqual({ input: 2, doubled: 4 });
+		releaseOld();
+		await expect(first).resolves.toEqual({ input: 1 });
+		expect(setState).not.toHaveBeenCalledWith({ input: 1, doubled: 2 });
+		expect(store).toEqual({ input: 2, doubled: 4 });
+	});
+
+	it("does not commit partial stale each results after awaited interceptors", async () => {
+		interface Root {
+			items: { value: number; doubled: number }[];
+		}
+
+		let releaseOld!: () => void;
+		let markOldInterceptorStarted!: () => void;
+		const oldInterceptorStarted = new Promise<void>((resolve) => {
+			markOldInterceptorStarted = resolve;
+		});
+		let store: Root = { items: [{ value: 0, doubled: 0 }] };
+		const setState = vi.fn((patch: DeepPartial<Root>) => {
+			store = patch as Root;
+		});
+
+		const graph = createGraph<Root>(
+			{
+				items: each({
+					doubled: (item) => item.value * 2,
+				}),
+			},
+			undefined,
+			{
+				stalePolicy: "discard",
+				getState: () => store,
+				setState,
+				interceptors: [
+					async (path, value, state, next) => {
+						if (
+							path === "items.1.doubled" &&
+							(state as Root).items[0].value === 1
+						) {
+							markOldInterceptorStarted();
+							await new Promise<void>((resolve) => {
+								releaseOld = resolve;
+							});
+						}
+						return next(value);
+					},
+				],
+			},
+		);
+
+		const first = graph.compute({
+			items: [{ value: 1 }, { value: 10 }],
+		});
+		await oldInterceptorStarted;
+		const second = graph.compute({
+			items: [{ value: 2 }, { value: 20 }],
+		});
+
+		await expect(second).resolves.toEqual({
+			items: [
+				{ value: 2, doubled: 4 },
+				{ value: 20, doubled: 40 },
+			],
+		});
+		releaseOld();
+		await expect(first).resolves.toEqual({
+			items: [{ value: 1 }, { value: 10 }],
+		});
+		expect(setState).not.toHaveBeenCalledWith({
+			items: [{ value: 1, doubled: 2 }, { value: 10 }],
+		});
+		expect(store).toEqual({
+			items: [
+				{ value: 2, doubled: 4 },
+				{ value: 20, doubled: 40 },
+			],
+		});
+	});
 });
 
 describe("stalePolicy discard-and-retry", () => {
@@ -111,6 +228,51 @@ describe("stalePolicy discard-and-retry", () => {
 			input: 1,
 			doubled: 2,
 		});
+	});
+
+	it("retries stale normal-node interceptors against the latest input", async () => {
+		interface Root {
+			input: number;
+			doubled: number;
+		}
+
+		let releaseOld!: () => void;
+		const store: Root = { input: 0, doubled: 0 };
+		const setState = vi.fn((patch: DeepPartial<Root>) => {
+			Object.assign(store, patch);
+		});
+
+		const graph = createGraph<Root>(
+			{
+				doubled: (f) => f.input * 2,
+			},
+			undefined,
+			{
+				stalePolicy: "discard-and-retry",
+				getState: () => store,
+				setState,
+				interceptors: [
+					async (path, value, state, next) => {
+						if (path === "doubled" && (state as Root).input === 1) {
+							await new Promise<void>((resolve) => {
+								releaseOld = resolve;
+							});
+						}
+						return next(value);
+					},
+				],
+			},
+		);
+
+		const first = graph.compute({ input: 1 });
+		await new Promise((resolve) => setTimeout(resolve, 0));
+		const second = graph.compute({ input: 2 });
+
+		await expect(second).resolves.toEqual({ input: 2, doubled: 4 });
+		releaseOld();
+		await expect(first).resolves.toEqual({ input: 2, doubled: 4 });
+		expect(setState).not.toHaveBeenCalledWith({ input: 1, doubled: 2 });
+		expect(store).toEqual({ input: 2, doubled: 4 });
 	});
 
 	it("does not replay source keys from earlier successful cycles", async () => {
@@ -290,6 +452,62 @@ describe("stalePolicy discard-and-retry", () => {
 		expect(setState).not.toHaveBeenCalledWith({
 			items: [{ value: 1, doubled: 2 }],
 		});
+	});
+
+	it("retries stale each interceptors without overwriting ready status", async () => {
+		interface Root {
+			items: { value: number; doubled: number }[];
+		}
+
+		let releaseOld!: () => void;
+		let store: Root = { items: [{ value: 0, doubled: 0 }] };
+		const setState = vi.fn((patch: DeepPartial<Root>) => {
+			store = patch as Root;
+		});
+
+		const graph = createGraph<Root>(
+			{
+				items: each({
+					doubled: (item) => item.value * 2,
+				}),
+			},
+			undefined,
+			{
+				stalePolicy: "discard-and-retry",
+				getState: () => store,
+				setState,
+				interceptors: [
+					async (path, value, state, next) => {
+						if (
+							path === "items.0.doubled" &&
+							(state as Root).items[0].value === 1
+						) {
+							await new Promise<void>((resolve) => {
+								releaseOld = resolve;
+							});
+						}
+						return next(value);
+					},
+				],
+			},
+		);
+
+		const first = graph.compute({ items: [{ value: 1 }] });
+		await new Promise((resolve) => setTimeout(resolve, 0));
+		const second = graph.compute({ items: [{ value: 2 }] });
+
+		await expect(second).resolves.toEqual({
+			items: [{ value: 2, doubled: 4 }],
+		});
+		releaseOld();
+		await expect(first).resolves.toEqual({
+			items: [{ value: 2, doubled: 4 }],
+		});
+		expect(graph.status("items.*.doubled")).toBe("ready");
+		expect(setState).not.toHaveBeenCalledWith({
+			items: [{ value: 1, doubled: 2 }],
+		});
+		expect(store).toEqual({ items: [{ value: 2, doubled: 4 }] });
 	});
 });
 

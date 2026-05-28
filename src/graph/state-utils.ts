@@ -13,23 +13,34 @@ function throwFrozenSnapshotMutation(): never {
 	throw new TypeError("Cannot mutate frozen snapshot.");
 }
 
-function disableMapMutators(value: Map<unknown, unknown>): void {
-	for (const method of ["set", "delete", "clear"] as const) {
+function safelyDisableMutator(value: object, method: string): void {
+	const descriptor = Object.getOwnPropertyDescriptor(value, method);
+	if (descriptor?.value === throwFrozenSnapshotMutation) return;
+
+	if (descriptor && !descriptor.configurable) return;
+	if (!descriptor && !Object.isExtensible(value)) return;
+
+	try {
 		Object.defineProperty(value, method, {
 			value: throwFrozenSnapshotMutation,
 			writable: false,
 			configurable: false,
 		});
+	} catch {
+		// Already non-extensible or otherwise not redefinable; freezing remains
+		// best-effort for collection internals in that case.
+	}
+}
+
+function disableMapMutators(value: Map<unknown, unknown>): void {
+	for (const method of ["set", "delete", "clear"] as const) {
+		safelyDisableMutator(value, method);
 	}
 }
 
 function disableSetMutators(value: Set<unknown>): void {
 	for (const method of ["add", "delete", "clear"] as const) {
-		Object.defineProperty(value, method, {
-			value: throwFrozenSnapshotMutation,
-			writable: false,
-			configurable: false,
-		});
+		safelyDisableMutator(value, method);
 	}
 }
 

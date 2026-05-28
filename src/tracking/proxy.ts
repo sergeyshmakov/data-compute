@@ -49,8 +49,12 @@ export function trackingProxy<T extends object>(
 	target: T,
 	deps: Set<string>,
 	path = "",
+	cache = new WeakMap<object, unknown>(),
 ): T {
-	return new Proxy(target, {
+	const existing = cache.get(target);
+	if (existing) return existing as T;
+
+	const proxy = new Proxy(target, {
 		get(obj, prop, receiver) {
 			if (prop === IS_PROXY) return true;
 			if (prop === PROXY_PATH) return path;
@@ -64,7 +68,29 @@ export function trackingProxy<T extends object>(
 			const key = path ? `${path}.${prop}` : prop;
 			deps.add(key);
 
-			const value = Reflect.get(obj, prop, receiver);
+			const reflectReceiver =
+				obj instanceof Map || obj instanceof Set ? obj : receiver;
+			const value = Reflect.get(obj, prop, reflectReceiver);
+
+			if (value instanceof Map) {
+				return trackingProxy(value, deps, key, cache);
+			}
+
+			if (value instanceof Set) {
+				return trackingProxy(value, deps, key, cache);
+			}
+
+			if (obj instanceof Map && typeof value === "function") {
+				return value.bind(obj);
+			}
+
+			if (obj instanceof Set && typeof value === "function") {
+				return value.bind(obj);
+			}
+
+			if (obj instanceof Date && typeof value === "function") {
+				return value.bind(obj);
+			}
 
 			// Wrap short-circuiting array methods to touch all elements first
 			if (
@@ -74,18 +100,20 @@ export function trackingProxy<T extends object>(
 			) {
 				return (...args: unknown[]) => {
 					touchArrayElements(obj, deps, path);
-					const proxied = trackingProxy(obj, deps, path);
+					const proxied = trackingProxy(obj, deps, path, cache);
 					// value is the array method from Reflect.get; use it directly
 					return (value as (...a: unknown[]) => unknown).apply(proxied, args);
 				};
 			}
 
 			if (value !== null && typeof value === "object") {
-				return trackingProxy(value as object, deps, key);
+				return trackingProxy(value as object, deps, key, cache);
 			}
 			return value;
 		},
 	});
+	cache.set(target, proxy);
+	return proxy;
 }
 
 /**

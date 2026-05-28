@@ -295,6 +295,70 @@ describe("compute", () => {
 				}),
 			);
 		});
+
+		it("skips dependents when a computed dependency fails", async () => {
+			interface Root {
+				b: number;
+				c: number;
+			}
+			const onError = vi.fn();
+			const setState = vi.fn();
+			const graph = createGraph<Root>(
+				{
+					b: () => {
+						throw new Error("formula error");
+					},
+					c: (f) => f.b + 1,
+				},
+				undefined,
+				{ onError, setState },
+			);
+
+			const result = await graph.compute({});
+
+			expect(Object.hasOwn(result, "c")).toBe(false);
+			expect(graph.status("b")).toBe("error");
+			expect(graph.status("c")).toBe("error");
+			expect(graph.computeResult((x) => x.c).value).toBeUndefined();
+			expect(setState).not.toHaveBeenCalledWith(
+				expect.objectContaining({ c: expect.any(Number) }),
+			);
+			expect(onError.mock.calls.map(([error]) => error.key)).toEqual([
+				"b",
+				"c",
+			]);
+		});
+
+		it("skips dependents after a late async dependency fails", async () => {
+			interface Root {
+				a: number;
+				b: number;
+			}
+			const onError = vi.fn();
+			const graph = createGraph<Root>(
+				{
+					b: async (f) => {
+						await Promise.resolve();
+						return f.a + 1;
+					},
+					a: () => {
+						throw new Error("formula error");
+					},
+				},
+				undefined,
+				{ onError },
+			);
+
+			const result = await graph.compute({});
+
+			expect(Object.hasOwn(result, "b")).toBe(false);
+			expect(graph.status("a")).toBe("error");
+			expect(graph.status("b")).toBe("error");
+			expect(onError.mock.calls.map(([error]) => error.key)).toEqual([
+				"a",
+				"b",
+			]);
+		});
 	});
 
 	describe("sourceKeys populated after first compute", () => {

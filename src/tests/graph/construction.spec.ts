@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { createGraph } from "../../graph/index.js";
+import { createGraph, each } from "../../index.js";
 import type {
 	AbRoot,
 	DepsRoot,
@@ -150,6 +150,87 @@ describe("createGraph construction", () => {
 			});
 			const deps = graph.deps((x: AsyncSourceRoot) => x.asyncData);
 			expect(deps).toContain("source");
+		});
+
+		it("records post-await accesses at runtime and retries in dependency order", async () => {
+			interface LateAsyncRoot {
+				a: number;
+				b: number;
+			}
+			const graph = createGraph<LateAsyncRoot>({
+				b: async (f) => {
+					await Promise.resolve();
+					return f.a + 1;
+				},
+				a: () => 1,
+			});
+
+			await expect(graph.compute({})).resolves.toEqual({ a: 1, b: 2 });
+			expect(graph.deps((x) => x.b)).toContain("a");
+			expect(graph.order).toEqual(["a", "b"]);
+		});
+
+		it("records post-await array iteration deps and retries each nodes first", async () => {
+			interface Root {
+				items: { price: number; total: number }[];
+				grandTotal: number;
+			}
+			const graph = createGraph<Root>({
+				grandTotal: async (f) => {
+					await Promise.resolve();
+					let total = 0;
+					for (const item of f.items) total += item.total;
+					return total;
+				},
+				items: each({
+					total: (item) => item.price * 2,
+				}),
+			});
+
+			await expect(
+				graph.compute({
+					items: [
+						{ price: 2, total: 0 },
+						{ price: 3, total: 0 },
+					],
+				}),
+			).resolves.toEqual({
+				items: [
+					{ price: 2, total: 4 },
+					{ price: 3, total: 6 },
+				],
+				grandTotal: 10,
+			});
+			expect(graph.deps((x) => x.grandTotal)).toContain("items.*.total");
+			const order = graph.order ?? [];
+			expect(order.indexOf("items.*.total")).toBeLessThan(
+				order.indexOf("grandTotal"),
+			);
+		});
+
+		it("records post-await source deps without reordering independent nodes", async () => {
+			interface Root {
+				source: number;
+				after: number;
+				independent: number;
+			}
+			const graph = createGraph<Root>({
+				after: async (f) => {
+					await Promise.resolve();
+					return f.source + 1;
+				},
+				independent: () => 1,
+			});
+			const initialOrder = [...(graph.order ?? [])];
+
+			await expect(graph.compute({ source: 2 })).resolves.toEqual({
+				source: 2,
+				after: 3,
+				independent: 1,
+			});
+			expect(graph.deps((x) => x.after)).toContain("source");
+			expect(graph.dependents((x) => x.source)).toContain("after");
+			expect(graph.order ?? []).toEqual(initialOrder);
 		});
 	});
 

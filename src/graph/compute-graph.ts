@@ -1,6 +1,7 @@
 import { BatchCoordinator } from "../batch/coordinator.js";
-import { topoSort } from "../dag/index.js";
+import { pathDependencies, topoSort } from "../dag/index.js";
 import { resolveAccessor } from "../tracking/accessor.js";
+import { readonlyTrackedSnapshot } from "../tracking/readonly-snapshot.js";
 import type {
 	BatchDataSourceConfig,
 	ComputeInput,
@@ -30,6 +31,7 @@ type RuntimeOutcome =
 			readonly status: "ready";
 			readonly runtimePath: string;
 			readonly result: unknown;
+			readonly shouldRetry: boolean;
 	  }
 	| {
 			readonly status: "error";
@@ -37,16 +39,39 @@ type RuntimeOutcome =
 			readonly cause: unknown;
 	  };
 
+interface ExecutionResult {
+	readonly result: unknown;
+	readonly shouldRetry: boolean;
+}
+
+type StaleAction<Root> =
+	| { readonly status: "fresh" }
+	| { readonly status: "stale" }
+	| {
+			readonly status: "retry";
+			readonly promise: Promise<DeepPartial<Root>>;
+	  };
+
+type CommitResult<Root> =
+	| { readonly status: "applied" }
+	| Exclude<StaleAction<Root>, { readonly status: "fresh" }>;
+
+class RuntimeDependencyCycleError extends Error {
+	constructor() {
+		super("Cyclic dependency detected.");
+	}
+}
+
 class ComputeGraph<Root> implements Graph<Root> {
 	readonly computedKeys: readonly string[];
 	readonly nodes: readonly string[];
-	readonly order: readonly string[];
-	readonly hasCycle: boolean;
 
 	private _sourceKeys: string[] = [];
+	private _order: readonly string[];
+	private _hasCycle: boolean;
 
-	private readonly depsMap: ReadonlyMap<string, ReadonlySet<string>>;
-	private readonly reverseMap: ReadonlyMap<string, ReadonlySet<string>>;
+	private depsMap: Map<string, Set<string>>;
+	private reverseMap: Map<string, Set<string>>;
 	private readonly flatNodes: FlatNode[];
 	private readonly flatNodeByPath: ReadonlyMap<string, FlatNode>;
 
@@ -89,13 +114,13 @@ class ComputeGraph<Root> implements Graph<Root> {
 
 		const allPaths = this.flatNodes.map((n) => n.path);
 		const { order, hasCycle } = topoSort(allPaths, this.depsMap);
-		this.hasCycle = hasCycle;
+		this._hasCycle = hasCycle;
 
 		if (hasCycle) {
 			throw new Error("Cyclic dependency detected.");
 		}
 
-		this.order = order;
+		this._order = order;
 		this.computedKeys = allPaths;
 		this.nodes = this.computedKeys;
 
@@ -111,6 +136,14 @@ class ComputeGraph<Root> implements Graph<Root> {
 
 	get sources(): readonly string[] {
 		return this._sourceKeys;
+	}
+
+	get order(): readonly string[] {
+		return this._order;
+	}
+
+	get hasCycle(): boolean {
+		return this._hasCycle;
 	}
 
 	compute(input: ComputeInput<Root>): Promise<DeepPartial<Root>> {
@@ -133,7 +166,7 @@ class ComputeGraph<Root> implements Graph<Root> {
 		const graphStalePolicy = this.options.stalePolicy ?? "discard";
 
 		// Coalesce all patches into a single patch
-		const granularPatch = this.pendingPatches.reduce(
+		const inputPatch = this.pendingPatches.reduce(
 			(acc, patch) => mergeDeepPartial(acc, patch),
 			// biome-ignore lint/suspicious/noExplicitAny: dynamic value traversal
 			{} as any,
@@ -144,107 +177,237 @@ class ComputeGraph<Root> implements Graph<Root> {
 		}
 
 		// Fetch full state if provided, otherwise assume granularPatch is the base
-		const baseState = this.options.getState?.() ?? granularPatch;
-
-		// Create the current full state to use for formulas
-		const state = mergeDeepPartial<Record<string, unknown>>(
-			cloneForCompute(baseState),
-			granularPatch,
-		);
-
-		const batchCoordinator = new BatchCoordinator();
+		const baseState = this.options.getState?.() ?? inputPatch;
 
 		// Populate source keys lazily
 		if (this._sourceKeys.length === 0) {
+			const initialState = mergeDeepPartial<Record<string, unknown>>(
+				cloneForCompute(baseState),
+				inputPatch,
+			);
 			const computedSet = new Set(this.computedKeys);
-			this._sourceKeys = Object.keys(state).filter((k) => !computedSet.has(k));
+			this._sourceKeys = Object.keys(initialState).filter(
+				(k) => !computedSet.has(k),
+			);
 		}
 
-		for (const key of this.order) {
-			this.setNodePending(key);
-		}
+		let runtimeDependencyRetries = 0;
+		const maxRuntimeDependencyRetries = Math.max(1, this.computedKeys.length);
+		while (true) {
+			let shouldRetryForRuntimeDeps = false;
+			let stoppedForStale = false;
+			const granularPatch = cloneForCompute(inputPatch) as Record<
+				string,
+				unknown
+			>;
 
-		for (const templatePath of this.order) {
-			const node = this.flatNodeByPath.get(templatePath);
-			if (!node) continue;
+			// Create the current full state to use for formulas
+			const state = mergeDeepPartial<Record<string, unknown>>(
+				cloneForCompute(baseState),
+				granularPatch,
+			);
 
-			const stalePolicy = this.effectiveStalePolicy(node, graphStalePolicy);
-			if (this.isStale(currentVersion)) {
-				batchCoordinator.abort();
-				if (stalePolicy === "discard-and-retry") return this.retryLatest(runId);
-				this.markRemainingStale(templatePath);
-				break;
+			const batchCoordinator = new BatchCoordinator();
+			const attemptOrder = [...this.order];
+			const attemptIndex = new Map(
+				attemptOrder.map((path, index) => [path, index]),
+			);
+			const stopForStale = (
+				action: CommitResult<Root> | StaleAction<Root>,
+			): Promise<DeepPartial<Root>> | "stale" | undefined => {
+				if (action.status === "retry") return action.promise;
+				if (action.status === "stale") {
+					stoppedForStale = true;
+					return "stale";
+				}
+			};
+
+			for (const key of attemptOrder) {
+				this.setNodePending(key);
 			}
 
-			if (node.isEach) {
-				const expansions = expandRuntimePaths(templatePath, state);
-				const outcomes = await Promise.all(
-					expansions.map(async ({ runtimePath, item }) => {
-						try {
-							const result = await this.executeNode(
-								node,
-								state,
-								batchCoordinator,
-								item,
-							);
-							return { status: "ready", runtimePath, result } as const;
-						} catch (cause) {
-							return { status: "error", runtimePath, cause } as const;
-						}
-					}),
-				);
+			for (let orderIndex = 0; orderIndex < attemptOrder.length; orderIndex++) {
+				const templatePath = attemptOrder[orderIndex];
+				const node = this.flatNodeByPath.get(templatePath);
+				if (!node) continue;
 
-				if (this.isStale(currentVersion)) {
-					batchCoordinator.abort();
-					if (stalePolicy === "discard-and-retry")
-						return this.retryLatest(runId);
-					this.markRemainingStale(templatePath);
+				const stalePolicy = this.effectiveStalePolicy(node, graphStalePolicy);
+				const staleBeforeNode = stopForStale(
+					this.handleStale(
+						currentVersion,
+						runId,
+						stalePolicy,
+						templatePath,
+						batchCoordinator,
+					),
+				);
+				if (staleBeforeNode) {
+					if (staleBeforeNode !== "stale") return staleBeforeNode;
 					break;
 				}
 
-				await this.applyEachOutcomes(
-					templatePath,
-					outcomes,
-					state,
-					granularPatch,
-				);
-			} else {
-				try {
-					const result = await this.executeNode(
-						node,
-						state,
-						batchCoordinator,
-						undefined,
+				const dependencyError = this.dependencyErrorFor(templatePath);
+				if (dependencyError) {
+					this.setNodeError(templatePath, dependencyError);
+					this.options.onError?.({ key: templatePath, cause: dependencyError });
+					continue;
+				}
+
+				if (node.isEach) {
+					const expansions = expandRuntimePaths(templatePath, state);
+					const outcomes = await Promise.all(
+						expansions.map(async ({ runtimePath, item, itemPath }) => {
+							try {
+								const execution = await this.executeNode(
+									node,
+									state,
+									batchCoordinator,
+									item,
+									itemPath,
+									attemptIndex,
+									orderIndex,
+								);
+								return {
+									status: "ready",
+									runtimePath,
+									result: execution.result,
+									shouldRetry: execution.shouldRetry,
+								} as const;
+							} catch (cause) {
+								if (cause instanceof RuntimeDependencyCycleError) throw cause;
+								return { status: "error", runtimePath, cause } as const;
+							}
+						}),
 					);
 
-					if (this.isStale(currentVersion)) {
-						batchCoordinator.abort();
-						if (stalePolicy === "discard-and-retry")
-							return this.retryLatest(runId);
-						this.markRemainingStale(node.path);
+					const staleAfterEach = stopForStale(
+						this.handleStale(
+							currentVersion,
+							runId,
+							stalePolicy,
+							templatePath,
+							batchCoordinator,
+						),
+					);
+					if (staleAfterEach) {
+						if (staleAfterEach !== "stale") return staleAfterEach;
 						break;
 					}
 
-					const interceptedResult = await this.applyInterceptors(
-						node.path,
-						result,
+					if (
+						outcomes.some(
+							(outcome) => outcome.status === "ready" && outcome.shouldRetry,
+						)
+					) {
+						batchCoordinator.abort();
+						shouldRetryForRuntimeDeps = true;
+						break;
+					}
+
+					const eachStatus = await this.applyEachOutcomes(
+						templatePath,
+						outcomes,
 						state,
+						granularPatch,
+						currentVersion,
 					);
-					setByPath(state, node.path, interceptedResult);
-					setByPath(granularPatch, node.path, interceptedResult);
-					this.setNodeReady(node.path, interceptedResult);
-				} catch (cause) {
-					this.setNodeError(node.path, cause);
-					this.options.onError?.({ key: node.path, cause });
+
+					if (eachStatus === "stale") {
+						const staleAfterInterceptors = stopForStale(
+							this.handleStale(
+								currentVersion,
+								runId,
+								stalePolicy,
+								templatePath,
+								batchCoordinator,
+							),
+						);
+						if (staleAfterInterceptors && staleAfterInterceptors !== "stale")
+							return staleAfterInterceptors;
+						break;
+					}
+				} else {
+					try {
+						const execution = await this.executeNode(
+							node,
+							state,
+							batchCoordinator,
+							undefined,
+							undefined,
+							attemptIndex,
+							orderIndex,
+						);
+
+						if (execution.shouldRetry) {
+							batchCoordinator.abort();
+							shouldRetryForRuntimeDeps = true;
+							break;
+						}
+
+						const staleAfterExecution = stopForStale(
+							this.handleStale(
+								currentVersion,
+								runId,
+								stalePolicy,
+								node.path,
+								batchCoordinator,
+							),
+						);
+						if (staleAfterExecution) {
+							if (staleAfterExecution !== "stale") return staleAfterExecution;
+							break;
+						}
+
+						const commit = await this.commitNodeResult(
+							node.path,
+							execution.result,
+							state,
+							granularPatch,
+							currentVersion,
+							runId,
+							stalePolicy,
+							batchCoordinator,
+						);
+						const commitStop = stopForStale(commit);
+						if (commitStop) {
+							if (commitStop !== "stale") return commitStop;
+							break;
+						}
+					} catch (cause) {
+						if (cause instanceof RuntimeDependencyCycleError) throw cause;
+						const staleAfterError = stopForStale(
+							this.handleStale(
+								currentVersion,
+								runId,
+								stalePolicy,
+								node.path,
+								batchCoordinator,
+							),
+						);
+						if (staleAfterError) {
+							if (staleAfterError !== "stale") return staleAfterError;
+							break;
+						}
+						this.setNodeError(node.path, cause);
+						this.options.onError?.({ key: node.path, cause });
+					}
 				}
 			}
-		}
 
-		if (!this.isStale(currentVersion)) {
-			this.options.setState?.(granularPatch);
-		}
+			if (shouldRetryForRuntimeDeps) {
+				runtimeDependencyRetries++;
+				if (runtimeDependencyRetries > maxRuntimeDependencyRetries) {
+					throw new Error("Runtime dependency retry limit exceeded.");
+				}
+				continue;
+			}
 
-		return granularPatch as DeepPartial<Root>;
+			if (!stoppedForStale && !this.isStale(currentVersion)) {
+				this.options.setState?.(granularPatch as DeepPartial<Root>);
+			}
+
+			return granularPatch as DeepPartial<Root>;
+		}
 	}
 
 	status(path: string): NodeStatus {
@@ -346,32 +509,157 @@ class ComputeGraph<Root> implements Graph<Root> {
 		state: Record<string, unknown>,
 		batchCoordinator: BatchCoordinator,
 		item: unknown,
-	): Promise<unknown> {
-		const frozenState = deepFreezeSnapshot(cloneForCompute(state));
+		itemPath: string | undefined,
+		attemptIndex: ReadonlyMap<string, number>,
+		orderIndex: number,
+	): Promise<ExecutionResult> {
+		const accessed = new Set<string>();
+		const rootSnapshot = cloneForCompute(state);
+		const snapshotCache = new WeakMap<object, unknown>();
+		const rootState = readonlyTrackedSnapshot(
+			rootSnapshot,
+			accessed,
+			"",
+			snapshotCache,
+		);
 		const localState = node.isEach
-			? deepFreezeSnapshot(cloneForCompute(item))
-			: frozenState;
+			? readonlyTrackedSnapshot(
+					cloneForCompute(item),
+					accessed,
+					itemPath ?? "",
+					snapshotCache,
+				)
+			: rootState;
 
-		if (node.type === "formula") {
-			return await node.fn(localState, frozenState);
+		let didThrow = false;
+		let caught: unknown;
+		let result: unknown;
+
+		try {
+			if (node.type === "formula") {
+				result = await node.fn(localState, rootState);
+			} else if (node.type === "batch" && node.config) {
+				const request = node.fn(localState, rootState);
+				result = await batchCoordinator.submit(
+					node.config as BatchDataSourceConfig<unknown, unknown>,
+					request,
+				);
+			} else if (node.type === "request" && node.config) {
+				const request = node.fn(localState, rootState);
+				result = await (
+					node.config as RequestDataSourceConfig<unknown, unknown>
+				).query(request);
+			}
+		} catch (cause) {
+			didThrow = true;
+			caught = cause;
 		}
 
-		if (node.type === "batch" && node.config) {
-			const request = node.fn(localState, frozenState);
-			return await batchCoordinator.submit(
-				node.config as BatchDataSourceConfig<unknown, unknown>,
-				request,
+		const shouldRetry = this.recordRuntimeDependencies(
+			node,
+			accessed,
+			attemptIndex,
+			orderIndex,
+		);
+		if (didThrow && !shouldRetry) throw caught;
+		return { result, shouldRetry };
+	}
+
+	private recordRuntimeDependencies(
+		node: FlatNode,
+		accessed: Set<string>,
+		attemptIndex: ReadonlyMap<string, number>,
+		orderIndex: number,
+	): boolean {
+		const runtimeDeps = pathDependencies(accessed, node.path);
+		const currentDeps = this.depsMap.get(node.path) ?? new Set<string>();
+		const addedDeps: string[] = [];
+		const addedComputedDeps: string[] = [];
+
+		for (const dep of runtimeDeps) {
+			if (!currentDeps.has(dep)) {
+				addedDeps.push(dep);
+				if (this.flatNodeByPath.has(dep)) addedComputedDeps.push(dep);
+			}
+		}
+
+		if (addedDeps.length === 0) return false;
+
+		this.depsMap.set(node.path, new Set([...currentDeps, ...addedDeps]));
+		this.reverseMap = buildReverseDepsMap(this.depsMap);
+
+		if (addedComputedDeps.length === 0) return false;
+
+		this.refreshTopology();
+
+		return addedComputedDeps.some((dep) => {
+			const depIndex = attemptIndex.get(dep);
+			return (
+				depIndex === undefined ||
+				depIndex > orderIndex ||
+				this.nodeStatus.get(dep) === "error"
 			);
+		});
+	}
+
+	private refreshTopology(): void {
+		this.reverseMap = buildReverseDepsMap(this.depsMap);
+		const { order, hasCycle } = topoSort([...this.computedKeys], this.depsMap);
+		this._hasCycle = hasCycle;
+
+		if (hasCycle) {
+			throw new RuntimeDependencyCycleError();
 		}
 
-		if (node.type === "request" && node.config) {
-			const request = node.fn(localState, frozenState);
-			return await (
-				node.config as RequestDataSourceConfig<unknown, unknown>
-			).query(request);
+		this._order = order;
+	}
+
+	private handleStale(
+		version: number,
+		runId: number,
+		stalePolicy: StalePolicy,
+		fromPath: string,
+		batchCoordinator: BatchCoordinator,
+	): StaleAction<Root> {
+		if (!this.isStale(version)) return { status: "fresh" };
+
+		batchCoordinator.abort();
+		if (stalePolicy === "discard-and-retry") {
+			return { status: "retry", promise: this.retryLatest(runId) };
 		}
 
-		return undefined;
+		this.markRemainingStale(fromPath);
+		return { status: "stale" };
+	}
+
+	private async commitNodeResult(
+		nodePath: string,
+		result: unknown,
+		state: Record<string, unknown>,
+		granularPatch: Record<string, unknown>,
+		version: number,
+		runId: number,
+		stalePolicy: StalePolicy,
+		batchCoordinator: BatchCoordinator,
+	): Promise<CommitResult<Root>> {
+		const interceptedResult = await this.applyInterceptors(
+			nodePath,
+			result,
+			state,
+		);
+		const staleAction = this.handleStale(
+			version,
+			runId,
+			stalePolicy,
+			nodePath,
+			batchCoordinator,
+		);
+		if (staleAction.status !== "fresh") return staleAction;
+
+		setByPath(state, nodePath, interceptedResult);
+		setByPath(granularPatch, nodePath, interceptedResult);
+		this.setNodeReady(nodePath, interceptedResult);
+		return { status: "applied" };
 	}
 
 	private applyInterceptors(
@@ -407,8 +695,10 @@ class ComputeGraph<Root> implements Graph<Root> {
 		outcomes: readonly RuntimeOutcome[],
 		state: Record<string, unknown>,
 		granularPatch: Record<string, unknown>,
-	): Promise<void> {
+		version: number,
+	): Promise<"applied" | "stale"> {
 		const successes: unknown[] = [];
+		const readyOutcomes: { runtimePath: string; result: unknown }[] = [];
 		let firstError: unknown;
 
 		for (const outcome of outcomes) {
@@ -419,10 +709,14 @@ class ComputeGraph<Root> implements Graph<Root> {
 						outcome.result,
 						state,
 					);
+					if (this.isStale(version)) return "stale";
 					successes.push(interceptedResult);
-					setByPath(state, outcome.runtimePath, interceptedResult);
-					setByPath(granularPatch, outcome.runtimePath, interceptedResult);
+					readyOutcomes.push({
+						runtimePath: outcome.runtimePath,
+						result: interceptedResult,
+					});
 				} catch (cause) {
+					if (this.isStale(version)) return "stale";
 					if (firstError === undefined) firstError = cause;
 					this.options.onError?.({
 						key: outcome.runtimePath,
@@ -438,10 +732,36 @@ class ComputeGraph<Root> implements Graph<Root> {
 			}
 		}
 
+		if (this.isStale(version)) return "stale";
+
+		for (const outcome of readyOutcomes) {
+			setByPath(state, outcome.runtimePath, outcome.result);
+			setByPath(granularPatch, outcome.runtimePath, outcome.result);
+		}
+
 		if (firstError !== undefined) {
 			this.setNodeError(templatePath, firstError);
 		} else {
 			this.setNodeReady(templatePath, successes);
+		}
+
+		return "applied";
+	}
+
+	private dependencyErrorFor(path: string): Error | undefined {
+		for (const dep of this.depsMap.get(path) ?? []) {
+			if (!this.flatNodeByPath.has(dep)) continue;
+			const snap = this.nodeSnap.get(dep);
+			if (snap?.status !== "error") continue;
+
+			const error = new Error(
+				`Dependency "${dep}" failed before "${path}" could run.`,
+			);
+			Object.defineProperty(error, "cause", {
+				value: snap.error,
+				configurable: true,
+			});
+			return error;
 		}
 	}
 
