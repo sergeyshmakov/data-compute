@@ -120,14 +120,14 @@ describe("topoSort", () => {
 			expect(result.hasCycle).toBe(false);
 		});
 
-		it("duplicate nodes in input cause hasCycle true and order shorter than nodes", () => {
+		it("deduplicates input nodes without reporting a false cycle", () => {
 			const adj = new Map<string, Set<string>>([
 				["a", new Set()],
 				["b", new Set(["a"])],
 			]);
 			const result = topoSort(["a", "a", "b"], adj);
-			expect(result.order.length).toBeLessThan(3);
-			expect(result.hasCycle).toBe(true);
+			expect(result.order).toEqual(["a", "b"]);
+			expect(result.hasCycle).toBe(false);
 		});
 	});
 });

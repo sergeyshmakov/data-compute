@@ -43,7 +43,7 @@ What happened:
 
 1. **Dependencies were auto-tracked.** When the graph was created, each formula ran once against a Proxy. The Proxy recorded which source fields were read.
 2. **Execution was topologically sorted.** `subtotal` runs before `tax`, `tax` before `total`. Order of definition doesn't matter.
-3. **A granular patch was returned.** Only the fields that were computed appear in the result.
+3. **A cycle patch was returned.** The input fields and evaluated computed outputs appear in the result.
 
 ## Add an async data source
 
@@ -121,17 +121,20 @@ const graph = createGraph<PricingForm>(
 
 `data-compute` doesn't own state. Provide `getState` and `setState` to keep results in sync with your store.
 
+In the example below, `applyPatch` is your framework or store helper that deep-merges patch paths into the current state.
+
 ```ts
 const graph = createGraph<OrderForm>(
   { /* formulas */ },
   { /* data sources */ },
   {
     getState: () => store,
-    setState: (patch) => Object.assign(store, patch),
+    setState: (patch) => applyPatch(store, patch),
   },
 );
 
-// Granular patches in, granular patches out
+// Granular patches in, granular patches out.
+// applyPatch should deep-merge patch paths into the store.
 graph.compute({ quantity: 2 });
 ```
 

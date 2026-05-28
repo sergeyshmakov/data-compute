@@ -13,68 +13,29 @@ import type {
 	NodeSnapshot,
 	NodeStatus,
 	RequestDataSourceConfig,
+	StalePolicy,
 	TraceStep,
 } from "../types.js";
 import { buildDepsMap, buildReverseDepsMap } from "./deps-maps.js";
 import { type FlatNode, flattenGraph } from "./flatten.js";
+import { expandRuntimePaths, getByPath, setByPath } from "./path-utils.js";
+import {
+	cloneForCompute,
+	deepFreezeSnapshot,
+	mergeDeepPartial,
+} from "./state-utils.js";
 
-function isPlainObject(item: unknown): item is Record<string, unknown> {
-	return (
-		item !== null &&
-		typeof item === "object" &&
-		!Array.isArray(item) &&
-		!(item instanceof Date) &&
-		!(item instanceof Set) &&
-		!(item instanceof Map)
-	);
-}
-
-function deepMerge<T>(target: unknown, source: unknown): T {
-	if (!isPlainObject(target) || !isPlainObject(source)) {
-		return source as T;
-	}
-
-	const output = { ...target };
-	for (const key of Object.keys(source)) {
-		if (isPlainObject(source[key])) {
-			if (!(key in target)) {
-				output[key] = source[key];
-			} else {
-				output[key] = deepMerge(target[key], source[key]);
-			}
-		} else {
-			output[key] = source[key];
-		}
-	}
-	return output as T;
-}
-
-function getByPath(obj: unknown, path: string): unknown {
-	const parts = path.split(".");
-	let curr: unknown = obj;
-	for (const p of parts) {
-		if (curr === null || curr === undefined) return undefined;
-		curr = (curr as Record<string, unknown>)[p];
-	}
-	return curr;
-}
-
-function setByPath(
-	obj: Record<string, unknown>,
-	path: string,
-	value: unknown,
-): void {
-	const parts = path.split(".");
-	let curr: Record<string, unknown> = obj;
-	for (let i = 0; i < parts.length - 1; i++) {
-		const p = parts[i];
-		if (curr[p] === undefined || curr[p] === null) {
-			curr[p] = /^\d+$/.test(parts[i + 1]) ? [] : {};
-		}
-		curr = curr[p] as Record<string, unknown>;
-	}
-	curr[parts[parts.length - 1]] = value;
-}
+type RuntimeOutcome =
+	| {
+			readonly status: "ready";
+			readonly runtimePath: string;
+			readonly result: unknown;
+	  }
+	| {
+			readonly status: "error";
+			readonly runtimePath: string;
+			readonly cause: unknown;
+	  };
 
 class ComputeGraph<Root> implements Graph<Root> {
 	readonly computedKeys: readonly string[];
@@ -87,6 +48,7 @@ class ComputeGraph<Root> implements Graph<Root> {
 	private readonly depsMap: ReadonlyMap<string, ReadonlySet<string>>;
 	private readonly reverseMap: ReadonlyMap<string, ReadonlySet<string>>;
 	private readonly flatNodes: FlatNode[];
+	private readonly flatNodeByPath: ReadonlyMap<string, FlatNode>;
 
 	// Runtime node state
 	private readonly nodeStatus = new Map<string, NodeStatus>();
@@ -98,13 +60,28 @@ class ComputeGraph<Root> implements Graph<Root> {
 	// Microtask batching state
 	private pendingPatches: DeepPartial<Root>[] = [];
 	private computePromise: Promise<DeepPartial<Root>> | null = null;
+	private nextRunId = 0;
+	private latestRunId = 0;
+	private latestRunPromise: Promise<DeepPartial<Root>> | null = null;
 
 	constructor(
 		formulas: DeepFormulaMap<Root, Root, Root>,
 		dataSources?: DataSourceMap<Root, Root, Root>,
 		private readonly options: GraphOptions<Root> = {},
 	) {
+		if (
+			options.cyclic !== undefined &&
+			(options.cyclic as string | undefined) !== "error"
+		) {
+			throw new Error(
+				`Unsupported cyclic mode "${String(options.cyclic)}"; cyclic graphs currently throw.`,
+			);
+		}
+
 		this.flatNodes = flattenGraph(formulas, dataSources);
+		this.flatNodeByPath = new Map(
+			this.flatNodes.map((node) => [node.path, node]),
+		);
 
 		// Static dependency extraction
 		this.depsMap = buildDepsMap(this.flatNodes);
@@ -114,10 +91,8 @@ class ComputeGraph<Root> implements Graph<Root> {
 		const { order, hasCycle } = topoSort(allPaths, this.depsMap);
 		this.hasCycle = hasCycle;
 
-		if (hasCycle && (options.cyclic ?? "error") === "error") {
-			throw new Error(
-				"Cyclic dependency detected. Use { cyclic: 'freeze' } to allow cycles with frozen values.",
-			);
+		if (hasCycle) {
+			throw new Error("Cyclic dependency detected.");
 		}
 
 		this.order = order;
@@ -143,31 +118,37 @@ class ComputeGraph<Root> implements Graph<Root> {
 		this.pendingPatches.push(input as DeepPartial<Root>);
 
 		if (!this.computePromise) {
-			this.computePromise = Promise.resolve().then(() => this.flushCompute());
+			const runId = ++this.nextRunId;
+			const promise = Promise.resolve().then(() => this.flushCompute(runId));
+			this.computePromise = promise;
+			this.latestRunId = runId;
+			this.latestRunPromise = promise;
 		}
 
 		return this.computePromise;
 	}
 
-	private async flushCompute(): Promise<DeepPartial<Root>> {
+	private async flushCompute(runId: number): Promise<DeepPartial<Root>> {
 		const currentVersion = this.version;
-		const stalePolicy = this.options.stalePolicy ?? "discard";
+		const graphStalePolicy = this.options.stalePolicy ?? "discard";
 
 		// Coalesce all patches into a single patch
 		const granularPatch = this.pendingPatches.reduce(
-			(acc, patch) => deepMerge(acc, patch),
+			(acc, patch) => mergeDeepPartial(acc, patch),
 			// biome-ignore lint/suspicious/noExplicitAny: dynamic value traversal
 			{} as any,
 		);
 		this.pendingPatches = [];
-		this.computePromise = null;
+		if (this.computePromise === this.latestRunPromise) {
+			this.computePromise = null;
+		}
 
 		// Fetch full state if provided, otherwise assume granularPatch is the base
 		const baseState = this.options.getState?.() ?? granularPatch;
 
 		// Create the current full state to use for formulas
-		const state = deepMerge<Record<string, unknown>>(
-			JSON.parse(JSON.stringify(baseState)),
+		const state = mergeDeepPartial<Record<string, unknown>>(
+			cloneForCompute(baseState),
 			granularPatch,
 		);
 
@@ -175,7 +156,7 @@ class ComputeGraph<Root> implements Graph<Root> {
 
 		// Populate source keys lazily
 		if (this._sourceKeys.length === 0) {
-			const computedSet = new Set(this.order);
+			const computedSet = new Set(this.computedKeys);
 			this._sourceKeys = Object.keys(state).filter((k) => !computedSet.has(k));
 		}
 
@@ -184,95 +165,57 @@ class ComputeGraph<Root> implements Graph<Root> {
 		}
 
 		for (const templatePath of this.order) {
+			const node = this.flatNodeByPath.get(templatePath);
+			if (!node) continue;
+
+			const stalePolicy = this.effectiveStalePolicy(node, graphStalePolicy);
 			if (this.isStale(currentVersion)) {
 				batchCoordinator.abort();
-				if (stalePolicy === "discard-and-retry")
-					return this.compute(granularPatch as ComputeInput<Root>);
+				if (stalePolicy === "discard-and-retry") return this.retryLatest(runId);
 				this.markRemainingStale(templatePath);
 				break;
 			}
 
-			const node = this.flatNodes.find((n) => n.path === templatePath);
-			if (!node) continue;
-
-			// If it's an each node, we need to iterate runtime arrays
 			if (node.isEach) {
-				const parts = node.path.split(".");
-				const parentTemplatePath = parts.slice(0, -1).join(".");
-				const leafProp = parts[parts.length - 1];
-
-				// We need to find all actual arrays matching the parentTemplatePath in the state
-				// For simplicity, we assume single-level wildcards like "items.*.tax"
-				const arrayPath = parentTemplatePath.replace(".*", "");
-				const arr = getByPath(state, arrayPath);
-
-				if (Array.isArray(arr)) {
-					const promises = arr.map(async (item, i) => {
-						const frozenState = Object.freeze({ ...state });
-						const frozenItem = Object.freeze({ ...item });
-						const runtimePath = `${arrayPath}.${i}.${leafProp}`;
-
+				const expansions = expandRuntimePaths(templatePath, state);
+				const outcomes = await Promise.all(
+					expansions.map(async ({ runtimePath, item }) => {
 						try {
-							// biome-ignore lint/suspicious/noExplicitAny: dynamic value traversal
-							let result: any;
-							if (node.type === "formula") {
-								result = await node.fn(frozenItem, frozenState);
-							} else if (node.type === "batch" && node.config) {
-								const req = node.fn(frozenItem, frozenState);
-								result = await batchCoordinator.submit(
-									node.config as BatchDataSourceConfig<unknown, unknown>,
-									req,
-								);
-							} else if (node.type === "request" && node.config) {
-								const req = node.fn(frozenItem, frozenState);
-								result = await (
-									node.config as RequestDataSourceConfig<unknown, unknown>
-								).query(req);
-							}
-
-							if (this.isStale(currentVersion)) {
-								batchCoordinator.abort();
-								// Cannot easily break a map loop, but we can prevent mutation
-								return;
-							}
-
-							setByPath(state, runtimePath, result);
-							setByPath(granularPatch, runtimePath, result);
-							this.setNodeReady(templatePath, result);
+							const result = await this.executeNode(
+								node,
+								state,
+								batchCoordinator,
+								item,
+							);
+							return { status: "ready", runtimePath, result } as const;
 						} catch (cause) {
-							this.setNodeError(templatePath, cause);
-							this.options.onError?.({ key: runtimePath, cause });
+							return { status: "error", runtimePath, cause } as const;
 						}
-					});
+					}),
+				);
 
-					await Promise.all(promises);
+				if (this.isStale(currentVersion)) {
+					batchCoordinator.abort();
+					if (stalePolicy === "discard-and-retry")
+						return this.retryLatest(runId);
+					this.markRemainingStale(templatePath);
+					break;
 				}
-			} else {
-				// Normal flat node
-				const frozenState = Object.freeze({ ...state });
 
+				this.applyEachOutcomes(templatePath, outcomes, state, granularPatch);
+			} else {
 				try {
-					// biome-ignore lint/suspicious/noExplicitAny: dynamic value traversal
-					let result: any;
-					if (node.type === "formula") {
-						result = await node.fn(frozenState, frozenState);
-					} else if (node.type === "batch" && node.config) {
-						const req = node.fn(frozenState, frozenState);
-						result = await batchCoordinator.submit(
-							node.config as BatchDataSourceConfig<unknown, unknown>,
-							req,
-						);
-					} else if (node.type === "request" && node.config) {
-						const req = node.fn(frozenState, frozenState);
-						result = await (
-							node.config as RequestDataSourceConfig<unknown, unknown>
-						).query(req);
-					}
+					const result = await this.executeNode(
+						node,
+						state,
+						batchCoordinator,
+						undefined,
+					);
 
 					if (this.isStale(currentVersion)) {
 						batchCoordinator.abort();
 						if (stalePolicy === "discard-and-retry")
-							return this.compute(granularPatch as ComputeInput<Root>);
+							return this.retryLatest(runId);
 						this.markRemainingStale(node.path);
 						break;
 					}
@@ -346,13 +289,11 @@ class ComputeGraph<Root> implements Graph<Root> {
 	}
 
 	trace(input: ComputeInput<Root>): readonly TraceStep[] {
-		const state: Record<string, unknown> = {
-			...(input as Record<string, unknown>),
-		};
+		const state = cloneForCompute(input) as Record<string, unknown>;
 		const steps: TraceStep[] = [];
 
 		for (const path of this.order) {
-			const node = this.flatNodes.find((n) => n.path === path);
+			const node = this.flatNodeByPath.get(path);
 			if (!node || node.isEach) continue;
 
 			// We don't trace each nodes for now
@@ -366,6 +307,9 @@ class ComputeGraph<Root> implements Graph<Root> {
 			const ms = performance.now() - start;
 
 			const depValues: Record<string, unknown> = {};
+			for (const dep of this.depsMap.get(path) ?? []) {
+				depValues[dep] = getByPath(state, dep);
+			}
 
 			if (
 				result !== null &&
@@ -387,8 +331,86 @@ class ComputeGraph<Root> implements Graph<Root> {
 		return steps;
 	}
 
+	private async executeNode(
+		node: FlatNode,
+		state: Record<string, unknown>,
+		batchCoordinator: BatchCoordinator,
+		item: unknown,
+	): Promise<unknown> {
+		const frozenState = deepFreezeSnapshot(cloneForCompute(state));
+		const localState = node.isEach
+			? deepFreezeSnapshot(cloneForCompute(item))
+			: frozenState;
+
+		if (node.type === "formula") {
+			return await node.fn(localState, frozenState);
+		}
+
+		if (node.type === "batch" && node.config) {
+			const request = node.fn(localState, frozenState);
+			return await batchCoordinator.submit(
+				node.config as BatchDataSourceConfig<unknown, unknown>,
+				request,
+			);
+		}
+
+		if (node.type === "request" && node.config) {
+			const request = node.fn(localState, frozenState);
+			return await (
+				node.config as RequestDataSourceConfig<unknown, unknown>
+			).query(request);
+		}
+
+		return undefined;
+	}
+
+	private applyEachOutcomes(
+		templatePath: string,
+		outcomes: readonly RuntimeOutcome[],
+		state: Record<string, unknown>,
+		granularPatch: Record<string, unknown>,
+	): void {
+		const successes: unknown[] = [];
+		let firstError: unknown;
+
+		for (const outcome of outcomes) {
+			if (outcome.status === "ready") {
+				successes.push(outcome.result);
+				setByPath(state, outcome.runtimePath, outcome.result);
+				setByPath(granularPatch, outcome.runtimePath, outcome.result);
+			} else {
+				if (firstError === undefined) firstError = outcome.cause;
+				this.options.onError?.({
+					key: outcome.runtimePath,
+					cause: outcome.cause,
+				});
+			}
+		}
+
+		if (firstError !== undefined) {
+			this.setNodeError(templatePath, firstError);
+		} else {
+			this.setNodeReady(templatePath, successes);
+		}
+	}
+
+	private effectiveStalePolicy(
+		node: FlatNode,
+		graphStalePolicy: StalePolicy,
+	): StalePolicy {
+		return node.config?.stalePolicy ?? graphStalePolicy;
+	}
+
 	private isStale(version: number): boolean {
 		return version !== this.version;
+	}
+
+	private retryLatest(runId: number): Promise<DeepPartial<Root>> {
+		if (this.latestRunId !== runId && this.latestRunPromise) {
+			return this.latestRunPromise;
+		}
+
+		return this.compute({} as ComputeInput<Root>);
 	}
 
 	private setNodePending(key: string): void {

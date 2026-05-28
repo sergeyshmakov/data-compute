@@ -5,6 +5,16 @@ import { dryRunProxy } from "./proxy.js";
 export function resolveAccessor<T>(accessor: (x: T) => unknown): string {
 	const deps = new Set<string>();
 	accessor(dryRunProxy(deps) as T);
-	for (const p of deps) return normalizePath(p);
+	let selected: string | undefined;
+	let selectedDepth = -1;
+	for (const p of deps) {
+		const normalized = normalizePath(p);
+		const depth = normalized.split(".").length;
+		if (depth >= selectedDepth) {
+			selected = normalized;
+			selectedDepth = depth;
+		}
+	}
+	if (selected) return selected;
 	throw new Error("Accessor did not access any property");
 }

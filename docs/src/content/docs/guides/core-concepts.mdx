@@ -39,7 +39,7 @@ subtotal: (f) => f.quantity * f.unitPrice
 Consequences:
 
 - **No manual `deps: [...]` arrays.** The graph is built automatically.
-- **Conditional dependencies are supported.** `(f) => f.useMetric ? f.kg * 2.2 : f.lbs` — both branches are recorded.
+- **Plain conditionals record the branch that runs during dry-run.** `(f) => f.useMetric ? f.kg * 2.2 : f.lbs` records the truthy dry-run branch, so move branch-heavy dependencies into explicit formulas until a branch helper exists.
 - **Renaming a field breaks the formula at compile time.** TypeScript catches it before runtime does.
 
 ## Topological execution order
@@ -64,7 +64,7 @@ Mechanically:
 2. **Merge with current state.** If `getState` is configured, the graph reads it and merges in the patch. Prevents stale closures when inputs change between the call and the microtask flush.
 3. **Build a snapshot.** Formulas see one immutable view of state for the duration of one `compute()` cycle.
 4. **Run formulas in topological order.** Each formula reads from the snapshot, writes its output into the result patch.
-5. **Return a granular patch.** Only the fields that actually changed appear in the result. Same shape as root.
+5. **Return a cycle patch.** The result contains the input patch plus computed/data-source outputs evaluated in this cycle. Same shape as root.
 
 ## Snapshot semantics
 

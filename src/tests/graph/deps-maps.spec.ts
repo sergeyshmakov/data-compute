@@ -72,12 +72,41 @@ describe("buildDepsMap", () => {
 		expect(deps).toContain("y");
 	});
 
+	it("anchors nested each item deps at the wildcard item path", () => {
+		const nodes: FlatNode[] = [
+			node(
+				"items.*.pricing.tax",
+				(item) => (item as { pricing: { base: number } }).pricing.base * 0.1,
+				true,
+			),
+		];
+		const depsMap = buildDepsMap(nodes);
+		const deps = depsMap.get("items.*.pricing.tax");
+		expect(deps).toContain("items.*.pricing.base");
+		expect(deps).not.toContain("items.*.pricing.pricing.base");
+	});
+
 	it("returns empty deps for formula with no reads", () => {
 		const nodes: FlatNode[] = [node("a", () => 1)];
 		const depsMap = buildDepsMap(nodes);
 		const deps = depsMap.get("a");
 		expect(deps).toBeDefined();
 		expect(deps?.size).toBe(0);
+	});
+
+	it("documents that plain conditionals only record the executed dry-run branch", () => {
+		const nodes: FlatNode[] = [
+			node("discount", (s) =>
+				(s as { flag: boolean; a: number; b: number }).flag
+					? (s as { flag: boolean; a: number; b: number }).a
+					: (s as { flag: boolean; a: number; b: number }).b,
+			),
+		];
+		const depsMap = buildDepsMap(nodes);
+		const deps = depsMap.get("discount");
+		expect(deps).toContain("flag");
+		expect(deps).toContain("a");
+		expect(deps).not.toContain("b");
 	});
 });
 

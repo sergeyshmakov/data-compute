@@ -73,7 +73,31 @@ describe("graph introspection", () => {
 				b: (f) => f.a,
 			});
 			const mermaid = graph.toMermaid();
-			expect(mermaid).toContain("  a");
+			expect(mermaid).toMatch(/^ {2}a$/m);
+			expect(mermaid).toContain("  a --> b");
+		});
+	});
+
+	describe("nested accessors", () => {
+		it("targets the leaf path for status, result, deps, and dependents", async () => {
+			interface NestedRoot {
+				nested: { value: number };
+				doubled: number;
+			}
+			const graph = createGraph<NestedRoot>({
+				nested: { value: () => 1 },
+				doubled: (f) => f.nested.value * 2,
+			});
+
+			await graph.compute({});
+
+			expect(graph.computeStatus((x) => x.nested.value)).toBe("ready");
+			expect(graph.computeResult((x) => x.nested.value)).toEqual({
+				value: 1,
+				status: "ready",
+			});
+			expect(graph.deps((x) => x.nested.value)).toEqual(["nested"]);
+			expect(graph.dependents((x) => x.nested.value)).toContain("doubled");
 		});
 	});
 

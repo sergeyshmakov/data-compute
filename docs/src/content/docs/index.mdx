@@ -4,7 +4,7 @@ description: Typed reactive derived state for TypeScript — with async-aware no
 template: splash
 hero:
   title: Typed Reactive Derived State, With Async-Aware Nodes
-  tagline: Build a typed DAG of formulas. Mix sync calculations with async data sources. Get atomic patches when anything changes.
+  tagline: Build a typed DAG of formulas. Mix sync calculations with async data sources. Get atomic cycle patches.
   actions:
     - text: Quick Start
       link: /data-compute/getting-started/quick-start/
@@ -53,7 +53,7 @@ A TypeScript-first computation graph engine. Define each derived value as a pure
 
 - Plain objects in, plain objects out — no observables, no signals, no class wrappers
 - Sync formulas and async data sources in one typed graph
-- Atomic patch output — only changed fields, same shape as root
+- Atomic cycle patches — input fields plus evaluated outputs, same shape as root
 - Framework-agnostic — works with MobX, Zustand, React, or standalone
 - Composes with TanStack Query rather than replacing it
 
@@ -101,7 +101,7 @@ A TypeScript-first computation graph engine. Define each derived value as a pure
     [API Cheatsheet](/data-compute/reference/api-cheatsheet/)
   </Card>
   <Card title="Types reference" icon="information">
-    `Graph`, `DataSource`, `DeepPartial`, and more.
+    `Graph`, `NodeSnapshot`, `TraceStep`, `DeepPartial`, and more.
 
     [Types](/data-compute/reference/types/)
   </Card>

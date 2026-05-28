@@ -1,6 +1,6 @@
 # data-compute
 
-Typed reactive derived state for TypeScript — with async-aware nodes. Build a typed DAG of formulas, mix sync calculations with async data sources, get atomic patches when anything changes.
+Typed reactive derived state for TypeScript — with async-aware nodes. Build a typed DAG of formulas, mix sync calculations with async data sources, get atomic cycle patches.
 
 [![npm version](https://img.shields.io/npm/v/data-compute.svg)](https://www.npmjs.com/package/data-compute)
 [![CI](https://github.com/sergeyshmakov/data-compute/actions/workflows/pr.yml/badge.svg)](https://github.com/sergeyshmakov/data-compute/actions/workflows/pr.yml)
@@ -43,7 +43,7 @@ A TypeScript-first computation graph engine. Define each derived value as a pure
 
 - Plain objects in, plain objects out — no observables, no signals, no class wrappers
 - Sync formulas and async data sources in one typed graph
-- Atomic patch output — only changed fields, same shape as root
+- Atomic cycle patches — input fields plus evaluated outputs, same shape as root
 - Framework-agnostic — works with MobX, Zustand, React, or standalone
 - Composes with TanStack Query rather than replacing it
 
@@ -88,7 +88,7 @@ const result = await graph.compute({
 //     subtotal: 100, tax: 10, total: 105 }
 ```
 
-Dependencies are auto-tracked by Proxy at graph definition time. Execution is topologically sorted. The result is a granular patch — only the fields that were computed appear.
+Dependencies are auto-tracked by Proxy at graph definition time. Execution is topologically sorted. The result is a cycle patch: the input fields for this cycle plus the computed outputs that ran.
 
 ### 2. Add an async data source
 
@@ -116,13 +116,15 @@ The async node participates in the same DAG as the sync formulas. Downstream for
 
 ### 3. Wire into a state manager
 
+Assume `applyPatch` is your framework or store helper that deep-merges patch paths into the current state.
+
 ```ts
 const graph = createGraph<OrderForm>(
   { /* formulas */ },
   { /* data sources */ },
   {
     getState: () => store,
-    setState: (patch) => Object.assign(store, patch),
+    setState: (patch) => applyPatch(store, patch),
   },
 );
 
@@ -130,7 +132,7 @@ const graph = createGraph<OrderForm>(
 graph.compute({ quantity: 2 });
 ```
 
-Granular patches in, granular patches out. See [Integrations](https://sergeyshmakov.github.io/data-compute/integrations/tanstack-query/) for MobX, Zustand, and React examples.
+Granular patches in, granular patches out. `applyPatch` should be your store's deep patch merge helper, so nested patches preserve unrelated siblings. See [Integrations](https://sergeyshmakov.github.io/data-compute/integrations/tanstack-query/) for MobX, Zustand, and React examples.
 
 ## When to use
 

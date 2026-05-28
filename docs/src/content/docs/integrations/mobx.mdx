@@ -26,9 +26,9 @@ const form = observable<OrderForm>({
   unitPrice: 20,
   taxRate: 0.1,
   discount: 0,
-  subtotal: 0,
-  tax: 0,
-  total: 0,
+  subtotal: 20,
+  tax: 2,
+  total: 22,
 });
 
 const graph = createGraph<OrderForm>(

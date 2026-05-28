@@ -6,26 +6,41 @@ description: Using data-compute with plain React state — no state manager requ
 ## Pattern — the `useComputed` hook
 
 ```ts
-import { useCallback, useEffect, useState } from "react";
-import { createGraph, type Graph } from "data-compute";
+import { useCallback, useEffect, useRef, useState } from "react";
+import { createGraph, type DeepPartial, type Graph } from "data-compute";
+
+function mergePatch<T>(state: T, patch: DeepPartial<T>): T {
+  // Use your app's deep patch merge here.
+  return { ...state, ...patch };
+}
 
 export function useComputed<T>(graph: Graph<T>, initial: T) {
   const [state, setState] = useState<T>(initial);
+  const latestRun = useRef(0);
+
+  const runCompute = useCallback((patch: DeepPartial<T>) => {
+    const runId = ++latestRun.current;
+    void graph.compute(patch).then((result) => {
+      if (runId === latestRun.current) {
+        setState((prev) => mergePatch(prev, result));
+      }
+    });
+  }, [graph]);
 
   useEffect(() => {
-    graph.compute(initial).then(setState);
+    runCompute(initial);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
+  }, [runCompute]);
 
   const update = useCallback(
-    (patch: Partial<T>) => {
+    (patch: DeepPartial<T>) => {
       setState((prev) => {
-        const next = { ...prev, ...patch };
-        void graph.compute(next).then(setState);
+        const next = mergePatch(prev, patch);
+        runCompute(next);
         return next;
       });
     },
-    [graph],
+    [runCompute],
   );
 
   return [state, update] as const;
@@ -44,7 +59,7 @@ const graph = createGraph<OrderForm>({
 function OrderPage() {
   const [order, updateOrder] = useComputed(graph, {
     quantity: 1, unitPrice: 20, taxRate: 0.1, discount: 0,
-    subtotal: 0, tax: 0, total: 0,
+    subtotal: 20, tax: 2, total: 22,
   });
 
   return (

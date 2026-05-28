@@ -15,8 +15,9 @@ export function buildDepsMap(nodes: FlatNode[]): Map<string, Set<string>> {
 
 		if (node.isEach) {
 			const parts = node.path.split(".");
-			const parentPath = parts.slice(0, -1).join(".");
-			itemProxy = dryRunProxy(accessed, parentPath);
+			const wildcardIndex = parts.lastIndexOf("*");
+			const itemPath = parts.slice(0, wildcardIndex + 1).join(".");
+			itemProxy = dryRunProxy(accessed, itemPath);
 		}
 
 		try {

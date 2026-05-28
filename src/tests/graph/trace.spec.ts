@@ -46,6 +46,29 @@ describe("trace", () => {
 			const steps = graph.trace({ a: 1, b: 2 });
 			expect(steps[0].result).toBe(3);
 		});
+
+		it("populates dependency values from the current trace state", () => {
+			const graph = createGraph<{
+				a: number;
+				b: number;
+				sum: number;
+				double: number;
+			}>({
+				sum: (f) => f.a + f.b,
+				double: (f) => f.sum * 2,
+			});
+			const steps = graph.trace({ a: 1, b: 2 });
+			expect(steps[0]).toMatchObject({
+				node: "sum",
+				deps: { a: 1, b: 2 },
+				result: 3,
+			});
+			expect(steps[1]).toMatchObject({
+				node: "double",
+				deps: { sum: 3 },
+				result: 6,
+			});
+		});
 	});
 
 	describe("async formula", () => {

@@ -55,12 +55,13 @@ export function topoSort(
 	nodes: string[],
 	adj: ReadonlyMap<string, ReadonlySet<string>>,
 ): TopoResult {
+	const uniqueNodes = [...new Set(nodes)];
 	// Build in-degree (count of *computed* predecessors) and reverse adjacency
 	const inDeg = new Map<string, number>();
 	const successors = new Map<string, string[]>(); // dependency → nodes that need it
 
-	const nodeSet = new Set(nodes);
-	for (const n of nodes) {
+	const nodeSet = new Set(uniqueNodes);
+	for (const n of uniqueNodes) {
 		let count = 0;
 		const deps = adj.get(n);
 		if (deps) {
@@ -98,5 +99,5 @@ export function topoSort(
 		}
 	}
 
-	return { order, hasCycle: order.length < nodes.length };
+	return { order, hasCycle: order.length < uniqueNodes.length };
 }

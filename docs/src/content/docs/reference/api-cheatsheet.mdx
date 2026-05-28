@@ -44,7 +44,7 @@ description: Every public method and helper at a glance.
 | Option | Purpose |
 |---|---|
 | `stalePolicy` | `"discard"` or `"discard-and-retry"` per data source. |
-| `cyclic` | `"error"` (default) or `"freeze"` — graph-level cycle handling. |
+| `cyclic` | `"error"` (default). Cyclic scheduling is deferred. |
 | `consistency` | v1: only `"hold-until-ready"`. |
 | `getState` | Called before each cycle to read current state. Prevents stale closures. |
 | `setState` | Called after each cycle with the granular patch. Skipped for stale results. |
@@ -59,6 +59,6 @@ import {
   request,
   batchRequest,
   type Graph,
-  type DataSource,
+  type DeepPartial,
 } from "data-compute";
 ```

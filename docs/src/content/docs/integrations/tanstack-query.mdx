@@ -22,6 +22,7 @@ description: How data-compute composes with TanStack Query — the network cache
 The simplest composition. TanStack Query manages the request lifecycle. The result flows into `data-compute` as a source field.
 
 ```ts
+import { useEffect, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { createGraph } from "data-compute";
 
@@ -53,12 +54,18 @@ function CheckoutPage({ productId, quantity, basePrice }) {
 
   useEffect(() => {
     if (!pricingQuery.data) return;
-    graph.compute({
+    let active = true;
+    void graph.compute({
       productId,
       quantity,
       basePrice,
       pricing: pricingQuery.data,
-    }).then(setResult);
+    }).then((patch) => {
+      if (active) setResult(patch as Form);
+    });
+    return () => {
+      active = false;
+    };
   }, [productId, quantity, basePrice, pricingQuery.data]);
 
   return <Receipt total={result?.total} />;

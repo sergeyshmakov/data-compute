@@ -1,5 +1,5 @@
-import { describe, expect, it } from "vitest";
-import { createGraph } from "../../graph/index.js";
+import { describe, expect, it, vi } from "vitest";
+import { createGraph, each } from "../../index.js";
 import type {
 	AbErrorRoot,
 	AbRoot,
@@ -121,6 +121,51 @@ describe("status and snapshot accessors", () => {
 			await graph.compute({});
 			expect(graph.status("a")).toBe("ready");
 			expect(graph.status("b")).toBe("error");
+		});
+	});
+
+	describe("each template status", () => {
+		async function runMixedEach(successDelay: number, errorDelay: number) {
+			interface Root {
+				items: { value: number; fail: boolean; total: number }[];
+			}
+			const onError = vi.fn();
+			const graph = createGraph<Root>(
+				{
+					items: each({
+						total: async (item) => {
+							const shouldFail = typeof item.fail === "boolean" && item.fail;
+							await new Promise((resolve) =>
+								setTimeout(resolve, shouldFail ? errorDelay : successDelay),
+							);
+							if (shouldFail) throw new Error("item failed");
+							return item.value * 2;
+						},
+					}),
+				},
+				undefined,
+				{ onError },
+			);
+
+			await graph.compute({
+				items: [
+					{ value: 1, fail: true, total: 0 },
+					{ value: 2, fail: false, total: 0 },
+				],
+			});
+
+			expect(graph.status("items.*.total")).toBe("error");
+			expect(onError).toHaveBeenCalledWith(
+				expect.objectContaining({ key: "items.0.total" }),
+			);
+		}
+
+		it("is error when an element fails before successful elements", async () => {
+			await runMixedEach(20, 0);
+		});
+
+		it("is error when an element fails after successful elements", async () => {
+			await runMixedEach(0, 20);
 		});
 	});
 

@@ -9,31 +9,34 @@ A computation graph parameterized by its root state type.
 
 ```ts
 interface Graph<T> {
-  compute(patch: DeepPartial<T>): Promise<DeepPartial<T>>;
+  compute(input: ComputeInput<T>): Promise<DeepPartial<T>>;
 
-  // Inspection
-  readonly nodes: readonly Path[];
-  readonly sources: readonly Path[];
-  readonly order: readonly Path[];
-  deps(accessor: Accessor<T>): readonly Path[];
-  dependents(accessor: Accessor<T>): readonly Path[];
+  readonly computedKeys: readonly string[];
+  readonly nodes: readonly string[];
+  readonly sourceKeys: readonly string[];
+  readonly sources: readonly string[];
+  readonly order?: readonly string[];
+  readonly hasCycle?: boolean;
+
+  status(path: string): NodeStatus;
+  computeStatus<U>(accessor: NodeAccessor<T, U>): NodeStatus;
+  snapshot<U = unknown>(path: string): NodeSnapshot<U>;
+  computeResult<U>(accessor: NodeAccessor<T, U>): {
+    readonly value: U | undefined;
+    readonly status: NodeStatus;
+  };
+
+  deps<U>(accessor: NodeAccessor<T, U>): readonly string[];
+  dependents<U>(accessor: NodeAccessor<T, U>): readonly string[];
   toMermaid(): string;
-
-  // Status
-  computeStatus(accessor: Accessor<T>): NodeStatus;
-  computeResult<U>(accessor: Accessor<T, U>): NodeResult<U>;
-  status(key: string): NodeStatus;
-  snapshot(key: string): NodeResult<unknown>;
-
-  // Debugging
-  trace(input: DeepPartial<T>): TraceEntry[];
+  trace(input: ComputeInput<T>): readonly TraceStep[];
 }
 ```
 
 ## `NodeStatus`
 
 ```ts
-type NodeStatus = "ready" | "pending" | "stale" | "error";
+type NodeStatus = "ready" | "stale" | "pending" | "error";
 ```
 
 | Status | Meaning |
@@ -43,39 +46,62 @@ type NodeStatus = "ready" | "pending" | "stale" | "error";
 | `"stale"` | The node's last result was invalidated by an input change before completion. |
 | `"error"` | The node's formula or data source threw. |
 
-## `NodeResult<U>`
+## `NodeSnapshot<U>`
 
 ```ts
-interface NodeResult<U> {
-  value: U | undefined;
-  status: NodeStatus;
-  error?: unknown;
-}
+type NodeSnapshot<U> =
+  | { readonly status: "ready"; readonly value: U }
+  | { readonly status: "stale"; readonly value: U }
+  | { readonly status: "pending" }
+  | { readonly status: "error"; readonly error: unknown };
 ```
 
-## `DataSource<T, U>`
+`snapshot(path)` returns this discriminated union for path-based status reads.
 
-The shape returned by `request` and `batchRequest`. You don't typically construct these directly — use the helpers.
+## Data source node types
+
+Users normally create these through `request()` and `batchRequest()`.
 
 ```ts
-type DataSource<T, U> = {
-  readonly deps: (state: T) => unknown;
-  readonly query: (input: unknown) => Promise<U> | Promise<U[]>;
-  readonly stalePolicy?: "discard" | "discard-and-retry";
-};
+type DataSourceNode<State, Root, Response> =
+  | BatchDataSourceNode<State, Root, any, Response>
+  | RequestDataSourceNode<State, Root, any, Response>;
+```
+
+The public config types are:
+
+```ts
+interface RequestDataSourceConfig<Request, Response> {
+  readonly query: (request: Request) => Promise<Response>;
+  readonly dedupeKey?: (request: Request) => string;
+  readonly stalePolicy?: StalePolicy;
+}
+
+interface BatchDataSourceConfig<Request, Response> {
+  readonly query: (
+    entries: readonly BatchEntry<Request>[],
+    meta: BatchQueryMeta,
+  ) => Promise<readonly BatchOutcome<Response>[]>;
+  readonly dedupeKey?: (request: Request) => string;
+  readonly stalePolicy?: StalePolicy;
+}
 ```
 
 ## `DeepPartial<T>`
 
-The shape of a `compute()` input and output patch. Recursively makes every property optional, preserving nested object structure.
+The shape of a `compute()` input and output patch. It recurses through objects, treats arrays as arrays of partial elements, preserves function values, and allows primitive leaves to be `undefined`.
 
 ```ts
-type DeepPartial<T> = T extends object
-  ? { [K in keyof T]?: DeepPartial<T[K]> }
-  : T;
+type DeepPartial<T> = T extends (...args: never[]) => unknown
+  ? T
+  : T extends Array<infer U>
+    ? Array<DeepPartial<U>>
+    : T extends object
+      ? { [P in keyof T]?: DeepPartial<T[P]> }
+      : T | undefined;
 ```
 
-Use this when typing your own helpers that wrap `compute()`:
+Use this when typing helpers that wrap `compute()`:
 
 ```ts
 function applyOrderUpdate(patch: DeepPartial<OrderForm>) {
@@ -83,21 +109,34 @@ function applyOrderUpdate(patch: DeepPartial<OrderForm>) {
 }
 ```
 
-## `Accessor<T, U = unknown>`
+## `NodeAccessor<T, U>`
 
 A lambda that extracts a node path from the root state. Used by `deps`, `dependents`, `computeStatus`, and `computeResult`.
 
 ```ts
-type Accessor<T, U = unknown> = (state: T) => U;
+type NodeAccessor<T, U> = (state: T) => U;
 
-graph.computeStatus((f) => f.subtotal);  // status of subtotal node
-graph.deps((f) => f.tax);                // direct deps of tax
+graph.computeStatus((f) => f.subtotal);
+graph.deps((f) => f.tax);
 ```
 
-The function is never invoked with real state — it's evaluated against a recording Proxy, the same engine as [`data-path`](https://www.npmjs.com/package/data-path).
+The function is evaluated against a recording proxy, not real application state.
+
+## `TraceStep`
+
+```ts
+interface TraceStep {
+  readonly node: string;
+  readonly deps: Record<string, unknown>;
+  readonly result: unknown;
+  readonly ms: number;
+}
+```
+
+`trace(input)` is intended for debugging synchronous execution and dependency values. Async results are reported as `"[async]"`.
 
 ## Inference notes
 
-- `createGraph<T>(formulas)` — formula return types are checked against the declared `T[K]` for each computed field.
-- Source fields are inferred from `T` minus the keys present in `formulas` and `dataSources`.
-- `compute()`'s return promise resolves to a `DeepPartial<T>` — TypeScript will narrow it based on what fields were actually written this cycle if you destructure.
+- `createGraph<T>(formulas)` checks formula return types against the declared `T` fields.
+- `compute()` resolves to `DeepPartial<T>` because the graph returns a cycle patch, not a full root state.
+- `CyclicMode` currently supports only `"error"`; cyclic scheduling is deferred.

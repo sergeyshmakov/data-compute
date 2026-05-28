@@ -116,6 +116,7 @@ export class BatchCoordinator {
 			for (const outcome of outcomes) {
 				const pending = receivers.get(outcome.id);
 				if (!pending) continue;
+				receivers.delete(outcome.id);
 				const isSuccess = "response" in outcome;
 				for (const p of pending) {
 					isSuccess
@@ -123,8 +124,15 @@ export class BatchCoordinator {
 						: p.reject((outcome as BatchFailure).error);
 				}
 			}
+
+			for (const [id, pending] of receivers) {
+				const error = new Error(`Missing batch outcome for id ${id}`);
+				for (const p of pending) p.reject(error);
+			}
 		} catch (err) {
 			for (const e of entries) e.reject(err);
+		} finally {
+			this.controllers.delete(controller);
 		}
 	}
 }

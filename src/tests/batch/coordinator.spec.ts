@@ -43,6 +43,33 @@ describe("BatchCoordinator", () => {
 			expect(r1).toBeDefined();
 			expect(r2).toBeDefined();
 		});
+
+		it("rejects submits omitted from query outcomes", async () => {
+			const config: BatchDataSourceConfig<{ req: number }, string> = {
+				query: vi
+					.fn()
+					.mockImplementation(async (entries: { id: string }[]) => [
+						{ id: entries[0].id, response: "first" },
+					]),
+			};
+			const coordinator = new BatchCoordinator();
+			const p1 = coordinator.submit(config, { req: 1 });
+			const p2 = coordinator.submit(config, { req: 2 });
+
+			await expect(p1).resolves.toBe("first");
+			await expect(p2).rejects.toThrow("Missing batch outcome for id");
+		});
+
+		it("ignores unknown query outcomes", async () => {
+			const config: BatchDataSourceConfig<{ req: number }, string> = {
+				query: vi.fn().mockImplementation(async (entries: { id: string }[]) => [
+					{ id: "unknown", response: "ignored" },
+					{ id: entries[0].id, response: "ok" },
+				]),
+			};
+			const coordinator = new BatchCoordinator();
+			await expect(coordinator.submit(config, { req: 1 })).resolves.toBe("ok");
+		});
 	});
 
 	describe("submit with dedupeKey", () => {
@@ -121,6 +148,47 @@ describe("BatchCoordinator", () => {
 			coordinator.abort();
 			expect(capturedSignal?.aborted).toBe(true);
 			await expect(resultPromise).rejects.toThrow();
+		});
+
+		it("does not abort completed successful queries", async () => {
+			let capturedSignal: AbortSignal | undefined;
+			const config: BatchDataSourceConfig<unknown, unknown> = {
+				query: vi
+					.fn()
+					.mockImplementation(
+						async (
+							entries: { id: string }[],
+							meta: { signal: AbortSignal },
+						) => {
+							capturedSignal = meta.signal;
+							return [{ id: entries[0].id, response: "ok" }];
+						},
+					),
+			};
+			const coordinator = new BatchCoordinator();
+			await coordinator.submit(config, {});
+			coordinator.abort();
+			expect(capturedSignal?.aborted).toBe(false);
+		});
+
+		it("does not abort completed failed queries", async () => {
+			let capturedSignal: AbortSignal | undefined;
+			const config: BatchDataSourceConfig<unknown, unknown> = {
+				query: vi
+					.fn()
+					.mockImplementation(
+						async (_entries: unknown[], meta: { signal: AbortSignal }) => {
+							capturedSignal = meta.signal;
+							throw new Error("query error");
+						},
+					),
+			};
+			const coordinator = new BatchCoordinator();
+			await expect(coordinator.submit(config, {})).rejects.toThrow(
+				"query error",
+			);
+			coordinator.abort();
+			expect(capturedSignal?.aborted).toBe(false);
 		});
 	});
 

@@ -188,7 +188,7 @@ export type ConsistencyMode = "hold-until-ready";
 export type StalePolicy = "discard" | "discard-and-retry";
 
 /** How the graph handles cyclic dependencies. */
-export type CyclicMode = "error" | "freeze";
+export type CyclicMode = "error";
 
 /**
  * Interceptor for transforming or validating node values.
@@ -227,7 +227,6 @@ export interface GraphOptions<Root> {
 	readonly stalePolicy?: StalePolicy;
 	/**
 	 * How to handle cyclic dependencies. "error" (default) throws at createGraph.
-	 * "freeze" lets cyclic nodes read from the previous compute() call.
 	 */
 	readonly cyclic?: CyclicMode;
 	/**

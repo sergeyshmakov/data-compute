@@ -1,5 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
-import { createGraph } from "../../graph/index.js";
+import { createGraph, each } from "../../index.js";
+import type { DeepPartial } from "../../types.js";
 
 interface DeepState {
 	a?: { b?: { c?: number; d?: number } };
@@ -7,6 +8,35 @@ interface DeepState {
 	computedC?: number;
 	computedZ?: number;
 	total?: number;
+}
+
+function mergePatch<T>(target: T, source: DeepPartial<T>): T {
+	if (Array.isArray(target) && Array.isArray(source)) {
+		const output = [...target] as unknown[];
+		for (let i = 0; i < source.length; i++) {
+			if (i in source) {
+				output[i] = mergePatch(output[i], source[i] as never);
+			}
+		}
+		return output as T;
+	}
+
+	if (
+		target !== null &&
+		source !== null &&
+		typeof target === "object" &&
+		typeof source === "object" &&
+		!Array.isArray(target) &&
+		!Array.isArray(source)
+	) {
+		const output = { ...(target as Record<string, unknown>) };
+		for (const [key, value] of Object.entries(source)) {
+			output[key] = mergePatch(output[key], value as never);
+		}
+		return output as T;
+	}
+
+	return source as T;
 }
 
 describe("Granular Updates and Microtask Batching", () => {
@@ -131,6 +161,77 @@ describe("Granular Updates and Microtask Batching", () => {
 		expect(patch).toEqual({
 			value: 20,
 			sum: 220, // 20 (patch) + 200 (latest base state)
+		});
+	});
+
+	it("merges array patches by index when building the runtime state", async () => {
+		interface Root {
+			items: { price: number; quantity: number; total: number }[];
+			grandTotal: number;
+		}
+		const store: Root = {
+			items: [
+				{ price: 10, quantity: 1, total: 10 },
+				{ price: 20, quantity: 1, total: 20 },
+			],
+			grandTotal: 30,
+		};
+		const graph = createGraph<Root>(
+			{
+				items: each({
+					total: (item) => item.price * item.quantity,
+				}),
+				grandTotal: (f) => f.items.reduce((sum, item) => sum + item.total, 0),
+			},
+			undefined,
+			{ getState: () => store },
+		);
+
+		const result = await graph.compute({ items: [{ quantity: 2 }] });
+
+		expect(result.items?.[0]?.total).toBe(20);
+		expect(result.grandTotal).toBe(40);
+		expect(mergePatch(store, result)).toEqual({
+			items: [
+				{ price: 10, quantity: 2, total: 20 },
+				{ price: 20, quantity: 1, total: 20 },
+			],
+			grandTotal: 40,
+		});
+	});
+
+	it("coalesces same-microtask array patches by index", async () => {
+		interface Root {
+			items: { price: number; quantity: number; total: number }[];
+		}
+		const store: Root = {
+			items: [
+				{ price: 10, quantity: 1, total: 10 },
+				{ price: 20, quantity: 1, total: 20 },
+			],
+		};
+		const graph = createGraph<Root>(
+			{
+				items: each({
+					total: (item) => item.price * item.quantity,
+				}),
+			},
+			undefined,
+			{ getState: () => store },
+		);
+		const secondItems: NonNullable<DeepPartial<Root>["items"]> = [];
+		secondItems[1] = { quantity: 3 };
+		const secondPatch: DeepPartial<Root> = { items: secondItems };
+
+		const first = graph.compute({ items: [{ quantity: 2 }] });
+		const second = graph.compute(secondPatch);
+		const [result] = await Promise.all([first, second]);
+
+		expect(result).toEqual({
+			items: [
+				{ quantity: 2, total: 20 },
+				{ quantity: 3, total: 60 },
+			],
 		});
 	});
 });

@@ -115,23 +115,23 @@ describe("createGraph construction", () => {
 			).toThrow("Cyclic dependency detected");
 		});
 
-		it("does not throw with cyclic freeze", () => {
+		it("rejects unsupported cyclic freeze mode", () => {
 			interface CyclicFreezeRoot {
 				a: number;
 				b: number;
 				c: number;
 			}
-			const graph = createGraph<CyclicFreezeRoot>(
-				{
-					a: (f) => (f as { c?: number }).c ?? 0,
-					b: (f) => f.a + 1,
-					c: (f) => f.b + 1,
-				},
-				undefined,
-				{ cyclic: "freeze" },
-			);
-			expect(graph).toBeDefined();
-			expect(graph.hasCycle).toBe(true);
+			expect(() =>
+				createGraph<CyclicFreezeRoot>(
+					{
+						a: (f) => (f as { c?: number }).c ?? 0,
+						b: (f) => f.a + 1,
+						c: (f) => f.b + 1,
+					},
+					undefined,
+					{ cyclic: "freeze" as "error" },
+				),
+			).toThrow('Unsupported cyclic mode "freeze"');
 		});
 	});
 
@@ -182,22 +182,23 @@ describe("createGraph construction", () => {
 			expect(graph.hasCycle).toBe(false);
 		});
 
-		it("is true for cyclic graph with freeze", () => {
+		it("is not observable for unsupported cyclic freeze mode", () => {
 			interface CyclicFreezeRoot {
 				a: number;
 				b: number;
 				c: number;
 			}
-			const graph = createGraph<CyclicFreezeRoot>(
-				{
-					a: (f) => (f as { c?: number }).c ?? 0,
-					b: (f) => f.a,
-					c: (f) => f.b,
-				},
-				undefined,
-				{ cyclic: "freeze" },
-			);
-			expect(graph.hasCycle).toBe(true);
+			expect(() =>
+				createGraph<CyclicFreezeRoot>(
+					{
+						a: (f) => (f as { c?: number }).c ?? 0,
+						b: (f) => f.a,
+						c: (f) => f.b,
+					},
+					undefined,
+					{ cyclic: "freeze" as "error" },
+				),
+			).toThrow('Unsupported cyclic mode "freeze"');
 		});
 	});
 

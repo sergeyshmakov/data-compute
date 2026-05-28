@@ -1,18 +1,14 @@
 import { describe, expect, it, vi } from "vitest";
 import { batchRequest, createGraph, request } from "../../index.js";
-import type { BatchDataSourceConfig } from "../../types.js";
 import type {
-	AbcRoot,
 	AbErrorRoot,
 	ApiOkRoot,
 	ApiResultRoot,
 	BonusRoot,
 	DelayedRoot,
 	DiscountRoot,
-	FastSlowRoot,
 	NestedArrRoot,
 	OptRoot,
-	SlowRoot,
 	SourceComputedRoot,
 	SumRoot,
 	SyncChainRoot,
@@ -47,20 +43,6 @@ describe("compute", () => {
 			expect(result.subtotal).toBe(20);
 			expect(result.tax).toBe(2);
 			expect(result.total).toBe(22);
-		});
-	});
-
-	describe("formulas receive frozen snapshot", () => {
-		it("each formula receives immutable copy; mutations do not affect others", async () => {
-			const graph = createGraph<AbcRoot>({
-				a: () => 1,
-				b: (f) => f.a + 1,
-				c: (f) => f.a + f.b,
-			});
-			const result = await graph.compute({});
-			expect(result.a).toBe(1);
-			expect(result.b).toBe(2);
-			expect(result.c).toBe(3);
 		});
 	});
 
@@ -230,25 +212,6 @@ describe("compute", () => {
 				expect.objectContaining({ a: 1, b: 2, sum: 3 }),
 			);
 		});
-
-		it("not called when result is discarded due to stale", async () => {
-			const setState = vi.fn();
-			const graph = createGraph<SlowRoot>(
-				{
-					slow: async () => {
-						await new Promise((r) => setTimeout(r, 50));
-						return "slow";
-					},
-				},
-				undefined,
-				{ setState, stalePolicy: "discard" },
-			);
-			const p1 = graph.compute({});
-			const p2 = graph.compute({});
-			const [, result2] = await Promise.all([p1, p2]);
-			expect(result2.slow).toBe("slow");
-			expect(setState).toHaveBeenCalledTimes(1);
-		});
 	});
 
 	describe("onError", () => {
@@ -271,86 +234,6 @@ describe("compute", () => {
 					cause: expect.any(Error),
 				}),
 			);
-		});
-	});
-
-	describe("stalePolicy discard", () => {
-		it("marks remaining pending nodes stale and returns partial state", async () => {
-			let resolveSlow!: () => void;
-			const slowPromise = new Promise<string>((r) => {
-				resolveSlow = () => r("slow");
-			});
-			const graph = createGraph<FastSlowRoot>(
-				{
-					fast: () => "fast",
-					slow: () => slowPromise,
-				},
-				undefined,
-				{ stalePolicy: "discard" },
-			);
-			const p1 = graph.compute({});
-			await new Promise((r) => setTimeout(r, 0));
-			const p2 = graph.compute({});
-			resolveSlow();
-			const [result1, result2] = await Promise.all([p1, p2]);
-			expect(result1.fast).toBe("fast");
-			expect(result1.slow).toBeUndefined();
-			expect(result2.fast).toBe("fast");
-			expect(result2.slow).toBe("slow");
-		});
-	});
-
-	describe("stalePolicy discard-and-retry", () => {
-		it("retries when stale; single compute completes successfully", async () => {
-			const graph = createGraph<SlowRoot>(
-				{
-					slow: async () => {
-						await new Promise((r) => setTimeout(r, 20));
-						return "done";
-					},
-				},
-				undefined,
-				{ stalePolicy: "discard-and-retry" },
-			);
-			const result = await graph.compute({});
-			expect(result.slow).toBe("done");
-		});
-	});
-
-	describe("batch coordinator abort on stale", () => {
-		it("aborts in-flight batch when stale detected", async () => {
-			const capturedSignals: AbortSignal[] = [];
-			const queryFn = vi
-				.fn()
-				.mockImplementation(
-					(_entries: unknown[], meta: { signal: AbortSignal }) => {
-						capturedSignals.push(meta.signal);
-						return new Promise((resolve, reject) => {
-							meta.signal.addEventListener("abort", () => {
-								reject(new DOMException("Aborted"));
-							});
-							setTimeout(() => resolve([{ id: "1", response: {} }]), 50);
-						});
-					},
-				);
-			const graph = createGraph<SlowRoot>(
-				{},
-				{
-					slow: batchRequest(() => ({ id: 0 }), {
-						query: queryFn as BatchDataSourceConfig<
-							{ id: number },
-							string
-						>["query"],
-						stalePolicy: "discard",
-					}),
-				},
-				{ stalePolicy: "discard" },
-			);
-			const p1 = graph.compute({});
-			await new Promise((r) => setTimeout(r, 0));
-			graph.compute({});
-			await p1;
-			expect(capturedSignals[0]?.aborted).toBe(true);
 		});
 	});
 

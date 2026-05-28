@@ -15,15 +15,20 @@ describe("resolveAccessor", () => {
 	});
 
 	describe("nested access", () => {
-		it("resolves (x) => x.a.b to root key 'a'", () => {
+		it("resolves (x) => x.a.b to leaf path 'a.b'", () => {
 			const accessor = (x: { a: { b: unknown } }) => x.a.b;
-			expect(resolveAccessor(accessor)).toBe("a");
+			expect(resolveAccessor(accessor)).toBe("a.b");
 		});
 
-		it("resolves (x) => x.pricing.taxRate to root key 'pricing'", () => {
+		it("resolves (x) => x.pricing.taxRate to leaf path 'pricing.taxRate'", () => {
 			const accessor = (x: { pricing: { taxRate: unknown } }) =>
 				x.pricing.taxRate;
-			expect(resolveAccessor(accessor)).toBe("pricing");
+			expect(resolveAccessor(accessor)).toBe("pricing.taxRate");
+		});
+
+		it("prefers the last path when equally deep paths are accessed", () => {
+			const accessor = (x: { a: unknown; b: unknown }) => [x.a, x.b];
+			expect(resolveAccessor(accessor)).toBe("b");
 		});
 	});
 
