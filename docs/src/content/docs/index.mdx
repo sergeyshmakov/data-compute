@@ -1,10 +1,10 @@
 ---
 title: data-compute
-description: Typed reactive derived state for TypeScript — with async-aware nodes.
+description: Consistent async-derived state for TypeScript — no mixed-state UI, no stale-overwrite races.
 template: splash
 hero:
-  title: Typed Reactive Derived State, With Async-Aware Nodes
-  tagline: Build a typed DAG of formulas. Mix sync calculations with async data sources. Get atomic cycle patches.
+  title: Consistent Async-Derived State for TypeScript
+  tagline: No mixed-state UI, no stale-overwrite races. When input, computed values, and async lookups depend on each other, data-compute runs them as one typed graph and returns atomic cycle patches.
   actions:
     - text: Quick Start
       link: /data-compute/getting-started/quick-start/
@@ -22,10 +22,13 @@ hero:
 
 import { Card, CardGrid } from "@astrojs/starlight/components";
 
-## Before / after
+## The problem
+
+Derived state that mixes user input, computed values, and async lookups is where consistency bugs live — a slow response lands after newer input and overwrites it, and the UI flashes a half-updated (mixed) state.
 
 ```ts
-// Before — derived state scattered across useMemo, useEffect, manual coordination
+// Before — useMemo/useEffect scatter. `pricing` for an OLD productId can resolve
+// after the user changed it, overwriting fresh input; the UI shows a mixed state.
 const subtotal = useMemo(() => quantity * basePrice, [quantity, basePrice]);
 const { data: pricing } = useQuery(["pricing", productId]);
 const finalPrice = useMemo(
@@ -33,11 +36,11 @@ const finalPrice = useMemo(
   [pricing, quantity],
 );
 const total = useMemo(() => finalPrice + tax, [finalPrice, tax]);
-// Race conditions, mixed-state UI, manual dep arrays
 ```
 
 ```ts
-// After — one typed DAG, atomic patches, no manual deps
+// After — one typed DAG. Downstream formulas wait for async, every cycle applies
+// atomically, and responses for superseded input are discarded. No mixed state.
 const graph = createGraph<Form>({
   subtotal:   (f) => f.quantity * f.basePrice,
   finalPrice: (f) => (f.pricing?.adjustedPrice ?? 0) * f.quantity,
@@ -49,24 +52,19 @@ const result = await graph.compute({ quantity, basePrice, pricing });
 
 ## What it is
 
-A TypeScript-first computation graph engine. Define each derived value as a pure formula; `data-compute` auto-tracks dependencies via Proxy, builds the DAG, and runs it in topological order. Async nodes participate in the same graph, with snapshot consistency and stale protection.
+A framework-agnostic computation engine for state that mixes sync formulas with async lookups. You declare each value as a pure formula; `data-compute` auto-tracks dependencies, orders the graph, waits for async sources, and applies each cycle atomically with stale-response protection.
 
-- Plain objects in, plain objects out — no observables, no signals, no class wrappers
-- Sync formulas and async data sources in one typed graph
-- Atomic cycle patches — input fields plus evaluated outputs, same shape as root
-- Framework-agnostic — works with MobX, Zustand, React, or standalone
-- Composes with TanStack Query rather than replacing it
+- **Sync + async in one graph** — downstream formulas wait for async data sources automatically.
+- **Consistency by construction** — every formula in a cycle sees the same snapshot; results apply atomically, so the UI never renders a half-updated state.
+- **Stale-response protection** — when inputs change mid-flight, obsolete responses are discarded or re-issued.
+- **Atomic cycle patches** — partial patch in, partial patch out, same shape as your root.
+- **Framework-agnostic** — plain objects in and out; composes with React, MobX, Zustand, and TanStack Query.
 
 ## Feature areas
 
 <CardGrid>
-  <Card title="Core graph" icon="document">
-    Pure formulas, auto-tracked dependencies via Proxy, topological execution.
-
-    [Core concepts](/data-compute/guides/core-concepts/)
-  </Card>
-  <Card title="Async & batching" icon="rocket">
-    `request` and `batchRequest` data sources, stale protection, microtask coalescing.
+  <Card title="Async & consistency" icon="rocket">
+    `request` and `batchRequest` data sources, snapshot consistency, stale protection, microtask coalescing.
 
     [Async and batching](/data-compute/guides/async-and-batching/)
   </Card>
@@ -75,8 +73,13 @@ A TypeScript-first computation graph engine. Define each derived value as a pure
 
     [Granular updates](/data-compute/guides/granular-updates/)
   </Card>
+  <Card title="Core graph" icon="document">
+    Pure formulas, auto-tracked dependencies via Proxy, topological execution.
+
+    [Core concepts](/data-compute/guides/core-concepts/)
+  </Card>
   <Card title="Integrations" icon="setting">
-    Works with TanStack Query, MobX, Zustand, plain React state.
+    Composes with TanStack Query, MobX, Zustand, plain React state.
 
     [TanStack Query](/data-compute/integrations/tanstack-query/)
   </Card>

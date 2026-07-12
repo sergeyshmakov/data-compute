@@ -1,7 +1,7 @@
 {
 	"name": "data-compute",
 	"version": "0.1.0",
-	"description": "Typed reactive derived state for TypeScript — with async-aware nodes. Build a typed DAG of formulas, mix sync calculations with async data sources, get atomic patches when anything changes.",
+	"description": "Consistent async-derived state for TypeScript. Run sync formulas and async data sources as one typed graph, with snapshot consistency and stale-response protection — no mixed-state UI, no stale-overwrite races.",
 	"license": "MIT",
 	"type": "module",
 	"main": "./dist/index.cjs",

@@ -1,6 +1,8 @@
 # data-compute
 
-Typed reactive derived state for TypeScript — with async-aware nodes. Build a typed DAG of formulas, mix sync calculations with async data sources, get atomic cycle patches.
+**Consistent async-derived state for TypeScript — no mixed-state UI, no stale-overwrite races.**
+
+When user input, computed values, and async lookups depend on each other, `data-compute` runs them as one typed graph and returns atomic *cycle patches*: the screen never shows a half-updated state, and a slow response can't overwrite newer input.
 
 [![npm version](https://img.shields.io/npm/v/data-compute.svg)](https://www.npmjs.com/package/data-compute)
 [![CI](https://github.com/sergeyshmakov/data-compute/actions/workflows/pr.yml/badge.svg)](https://github.com/sergeyshmakov/data-compute/actions/workflows/pr.yml)
@@ -12,10 +14,13 @@ Typed reactive derived state for TypeScript — with async-aware nodes. Build a 
 
 ---
 
-## Before / after
+## The problem
+
+Derived state that mixes user input, computed values, and async lookups is where consistency bugs live — a slow response lands after newer input and overwrites it, and the UI flashes a half-updated (mixed) state.
 
 ```ts
-// Before — derived state scattered across useMemo, useEffect, manual coordination
+// Before — useMemo/useEffect scatter. `pricing` for an OLD productId can resolve
+// after the user changed it, overwriting fresh input; the UI shows a mixed state.
 const subtotal = useMemo(() => quantity * basePrice, [quantity, basePrice]);
 const { data: pricing } = useQuery(["pricing", productId]);
 const finalPrice = useMemo(
@@ -23,11 +28,11 @@ const finalPrice = useMemo(
   [pricing, quantity],
 );
 const total = useMemo(() => finalPrice + tax, [finalPrice, tax]);
-// Manual dep arrays. Race conditions on async. Mixed-state UI when results arrive out of order.
 ```
 
 ```ts
-// After — one typed DAG, atomic patches, no manual deps
+// After — one typed DAG. Downstream formulas wait for async, every cycle applies
+// atomically, and responses for superseded input are discarded. No mixed state.
 const graph = createGraph<Form>({
   subtotal:   (f) => f.quantity * f.basePrice,
   finalPrice: (f) => (f.pricing?.adjustedPrice ?? 0) * f.quantity,
@@ -39,13 +44,28 @@ const result = await graph.compute({ quantity, basePrice, pricing });
 
 ## What it is
 
-A TypeScript-first computation graph engine. Define each derived value as a pure formula; `data-compute` auto-tracks dependencies via Proxy, builds the DAG, and runs it in topological order. Async data sources participate in the same graph, with snapshot consistency and stale protection.
+A framework-agnostic computation engine for state that mixes sync formulas with async lookups. You declare each value as a pure formula; `data-compute` auto-tracks dependencies, orders the graph, waits for async sources, and applies each cycle atomically with stale-response protection.
 
-- Plain objects in, plain objects out — no observables, no signals, no class wrappers
-- Sync formulas and async data sources in one typed graph
-- Atomic cycle patches — input fields plus evaluated outputs, same shape as root
-- Framework-agnostic — works with MobX, Zustand, React, or standalone
-- Composes with TanStack Query rather than replacing it
+- **Sync + async in one graph** — downstream formulas wait for async data sources automatically; no manual coordination.
+- **Consistency by construction** — every formula in a cycle sees the same snapshot and results apply atomically, so the UI never renders a half-updated state.
+- **Stale-response protection** — when inputs change mid-flight, obsolete responses are discarded (or re-issued). Kills the new-count × old-price race.
+- **Atomic cycle patches** — partial patch in, partial patch out, same shape as your root. No full snapshots cross the API.
+- **Framework-agnostic** — plain objects in and out; composes with React, MobX, Zustand, and TanStack Query rather than replacing them.
+
+## Is this for you?
+
+**Reach for it when:**
+
+- Derived state is **shared across components** and must stay consistent everywhere.
+- Derived state comes from **multiple async sources** and mixed-state UI is unacceptable.
+- Your backend expects **batched requests** — `batchRequest` coalesces N inputs into one call.
+- You keep fighting **new-count × old-price** style races — `stalePolicy` eliminates the class.
+
+**Skip it when:**
+
+- It's **sync derived state in one component** — `useMemo` is fine.
+- Your state is **purely async with no derivations** — use TanStack Query directly.
+- You want **signals / reactivity primitives** — use Solid, Signals, or MobX. `data-compute` is not a reactivity engine; it's a computation engine consumed by your reactivity layer.
 
 ## Install
 
@@ -140,22 +160,6 @@ graph.compute({ quantity: 2 });
 
 Granular patches in, granular patches out. `applyPatch` should be your store's deep patch merge helper, so nested patches preserve unrelated siblings. See [Integrations](https://sergeyshmakov.github.io/data-compute/integrations/tanstack-query/) for MobX, Zustand, and React examples.
 
-## When to use
-
-| Scenario | Use data-compute? |
-|---|---|
-| Sync derived state in one component | Overkill — `useMemo` is fine |
-| Derived state shared across components | **Yes** — one graph, consistent results everywhere |
-| Async derived state from multiple sources | **Yes** — DAG holds until consistent, no mixed-state UI |
-| Backend expects batched requests | **Yes** — `batchRequest` coalesces automatically |
-| New-count × old-price race conditions | **Yes** — `stalePolicy` eliminates the class of bug |
-
-## When not to use
-
-- **You already have TanStack Query and your derivations are trivial.** Plain selectors are simpler.
-- **Your state is purely async with no derivations.** Use TanStack Query directly.
-- **You want signals/reactivity primitives.** Use Solid, Signals, or MobX. `data-compute` is not a reactivity engine — it's a computation engine consumed by your reactivity layer.
-
 ## Use with TanStack Query
 
 `data-compute` and TanStack Query operate at different layers:
@@ -228,16 +232,18 @@ Full reference: [API cheatsheet](https://sergeyshmakov.github.io/data-compute/re
 
 ## Comparison
 
+Ordered by what sets `data-compute` apart — the differentiators are up top; the last two rows are table stakes it shares with mature incumbents.
+
 | | `data-compute` | Reselect | MobX computed | Jotai derived | TanStack Query |
 |---|---|---|---|---|---|
-| Typed derived state | ✅ | Manual | ✅ | ✅ | ❌ |
-| Auto-tracked deps | ✅ Proxy | Manual selectors | ✅ | ✅ | n/a |
 | Async nodes in same graph | ✅ | ❌ | Workaround | Async atoms | n/a |
 | Snapshot consistency | ✅ | n/a | Per-tick | Per-render | n/a |
-| Request batching | ✅ | ❌ | ❌ | ❌ | ✅ |
 | Stale protection on inputs | ✅ | n/a | Manual | Manual | ✅ |
 | Granular patch output | ✅ | ❌ | n/a | n/a | n/a |
+| Request batching | ✅ | ❌ | ❌ | ❌ | ✅ |
 | Framework-agnostic | ✅ | ✅ | ❌ MobX | ❌ React | ❌ React/Vue/Solid |
+| Typed derived state | ✅ | Manual | ✅ | ✅ | ❌ |
+| Auto-tracked deps | ✅ Proxy | Manual selectors | ✅ | ✅ | n/a |
 
 ## Links
 
