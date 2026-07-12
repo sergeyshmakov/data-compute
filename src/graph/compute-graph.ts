@@ -110,6 +110,16 @@ class ComputeGraph<Root> implements Graph<Root> {
 		}
 
 		this.flatNodes = flattenGraph(formulas, dataSources);
+
+		// A root-level formula/data source flattens to an empty node path, which
+		// would be committed under a "" key rather than as the root value. The
+		// graph models named fields, so reject this up front with a clear message.
+		if (this.flatNodes.some((node) => node.path === "")) {
+			throw new Error(
+				"Root-level formulas and data sources are not supported; wrap them in a named field.",
+			);
+		}
+
 		this.flatNodeByPath = new Map(
 			this.flatNodes.map((node) => [node.path, node]),
 		);
@@ -227,6 +237,9 @@ class ComputeGraph<Root> implements Graph<Root> {
 		let runtimeDependencyRetries = 0;
 		while (true) {
 			let shouldRetryForRuntimeDeps = false;
+			// Effective stale policy of the node that triggered a runtime-dependency
+			// retry, used if that retry turns out to be stale.
+			let retryStalePolicy: StalePolicy = graphStalePolicy;
 			let stoppedForStale = false;
 			const granularPatch = cloneForCompute(inputPatch) as Record<
 				string,
@@ -333,6 +346,7 @@ class ComputeGraph<Root> implements Graph<Root> {
 					) {
 						batchCoordinator.abort();
 						shouldRetryForRuntimeDeps = true;
+						retryStalePolicy = stalePolicy;
 						break;
 					}
 
@@ -373,6 +387,7 @@ class ComputeGraph<Root> implements Graph<Root> {
 						if (execution.shouldRetry) {
 							batchCoordinator.abort();
 							shouldRetryForRuntimeDeps = true;
+							retryStalePolicy = stalePolicy;
 							break;
 						}
 
@@ -435,7 +450,7 @@ class ComputeGraph<Root> implements Graph<Root> {
 					const staleAction = this.handleStale(
 						currentVersion,
 						runId,
-						graphStalePolicy,
+						retryStalePolicy,
 						attemptOrder[0] ?? "",
 						batchCoordinator,
 					);
@@ -556,6 +571,10 @@ class ComputeGraph<Root> implements Graph<Root> {
 				"then" in result &&
 				typeof (result as PromiseLike<unknown>).then === "function"
 			) {
+				// trace() is synchronous and does not await async nodes; swallow any
+				// eventual rejection so tracing a rejecting formula cannot surface
+				// as an unhandled rejection.
+				Promise.resolve(result as PromiseLike<unknown>).catch(() => {});
 				steps.push({
 					node: path,
 					deps: depValues,
