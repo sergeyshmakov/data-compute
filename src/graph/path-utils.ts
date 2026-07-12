@@ -61,7 +61,18 @@ export function setByPath(
 	curr[parts[parts.length - 1]] = value;
 }
 
-/** Clears the leaf at `path` if present. Missing intermediate paths are a no-op. */
+/**
+ * Deletes the leaf at `path` if present. Missing intermediate paths are a no-op.
+ *
+ * Array indices are removed as holes, not overwritten with `undefined`. This
+ * function strips a computed value from the *output* patch, and a hole is the
+ * only representation the deep-merge patch semantics (`i in source`) and array
+ * clone/scan (which key off `length` + `i in`) treat as "not present": an
+ * un-produced scalar `each` entry is then omitted from the patch instead of
+ * overwriting the consumer's existing value with `undefined`. `delete` leaves
+ * `length` unchanged, so wildcard scans (which iterate by `length` and read a
+ * hole as `undefined`) are unaffected either way.
+ */
 export function deleteByPath(obj: Record<string, unknown>, path: string): void {
 	assertSafePath(path);
 	const parts = path.split(".");
@@ -71,15 +82,7 @@ export function deleteByPath(obj: Record<string, unknown>, path: string): void {
 		curr = (curr as Record<string, unknown>)[parts[i]];
 	}
 	if (curr === null || typeof curr !== "object") return;
-	const leaf = parts[parts.length - 1];
-	// For an array index, clear the slot to `undefined` rather than `delete`,
-	// which would leave a sparse hole and desync `length`/wildcard scans. For
-	// object keys, remove the property.
-	if (Array.isArray(curr) && /^\d+$/.test(leaf)) {
-		if (Number(leaf) < curr.length) curr[Number(leaf)] = undefined;
-	} else {
-		delete (curr as Record<string, unknown>)[leaf];
-	}
+	delete (curr as Record<string, unknown>)[parts[parts.length - 1]];
 }
 
 export function expandRuntimePaths(
