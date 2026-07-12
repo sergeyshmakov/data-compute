@@ -643,28 +643,41 @@ class ComputeGraph<Root> implements Graph<Root> {
 				)
 			: rootState;
 
-		let didThrow = false;
-		let caught: unknown;
-		let result: unknown;
-
-		try {
-			if (node.type === "formula") {
+		if (node.type === "formula") {
+			// A formula reads its inputs throughout its (possibly async) body, so
+			// dependencies can only be finalized after it settles.
+			let didThrow = false;
+			let caught: unknown;
+			let result: unknown;
+			try {
 				result = await node.fn(localState, rootState);
-			} else if (node.type === "batch" && node.config) {
-				const request = node.fn(localState, rootState);
-				result = await batchCoordinator.submit(
-					node.config as BatchDataSourceConfig<unknown, unknown>,
-					request,
-				);
-			} else if (node.type === "request" && node.config) {
-				const request = node.fn(localState, rootState);
-				result = await (
-					node.config as RequestDataSourceConfig<unknown, unknown>
-				).query(request);
+			} catch (cause) {
+				didThrow = true;
+				caught = cause;
 			}
+			const shouldRetry = this.recordRuntimeDependencies(
+				node,
+				accessed,
+				attemptIndex,
+				orderIndex,
+			);
+			if (didThrow && !shouldRetry) throw caught;
+			return { result, shouldRetry };
+		}
+
+		// Data source: the deps function builds the request synchronously, so all
+		// state reads happen now. Record dependencies and decide on a retry BEFORE
+		// issuing the query — otherwise a runtime-discovered dependency would fire
+		// a query built from stale/undefined inputs and only retry after it (and
+		// any backend side effect) settled.
+		let request: unknown;
+		let requestThrew = false;
+		let requestError: unknown;
+		try {
+			request = node.fn(localState, rootState);
 		} catch (cause) {
-			didThrow = true;
-			caught = cause;
+			requestThrew = true;
+			requestError = cause;
 		}
 
 		const shouldRetry = this.recordRuntimeDependencies(
@@ -673,8 +686,21 @@ class ComputeGraph<Root> implements Graph<Root> {
 			attemptIndex,
 			orderIndex,
 		);
-		if (didThrow && !shouldRetry) throw caught;
-		return { result, shouldRetry };
+		if (shouldRetry) return { result: undefined, shouldRetry: true };
+		if (requestThrew) throw requestError;
+
+		let result: unknown;
+		if (node.type === "batch" && node.config) {
+			result = await batchCoordinator.submit(
+				node.config as BatchDataSourceConfig<unknown, unknown>,
+				request,
+			);
+		} else if (node.type === "request" && node.config) {
+			result = await (
+				node.config as RequestDataSourceConfig<unknown, unknown>
+			).query(request);
+		}
+		return { result, shouldRetry: false };
 	}
 
 	private recordRuntimeDependencies(
