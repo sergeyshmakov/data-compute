@@ -15,12 +15,13 @@ interface Graph<T> {
   readonly nodes: readonly string[];
   readonly sourceKeys: readonly string[];
   readonly sources: readonly string[];
-  readonly order?: readonly string[];
-  readonly hasCycle?: boolean;
+  readonly order: readonly string[];
+  readonly hasCycle: boolean;
 
   status(path: string): NodeStatus;
   computeStatus<U>(accessor: NodeAccessor<T, U>): NodeStatus;
   snapshot<U = unknown>(path: string): NodeSnapshot<U>;
+  computeSnapshot<U>(accessor: NodeAccessor<T, U>): NodeSnapshot<U>;
   computeResult<U>(accessor: NodeAccessor<T, U>): {
     readonly value: U | undefined;
     readonly status: NodeStatus;
@@ -56,7 +57,8 @@ type NodeSnapshot<U> =
   | { readonly status: "error"; readonly error: unknown };
 ```
 
-`snapshot(path)` returns this discriminated union for path-based status reads.
+`snapshot(path)` returns this discriminated union for path-based status reads;
+`computeSnapshot(accessor)` returns the same union for typed accessor-based reads.
 
 ## Data source node types
 
@@ -73,7 +75,6 @@ The public config types are:
 ```ts
 interface RequestDataSourceConfig<Request, Response> {
   readonly query: (request: Request) => Promise<Response>;
-  readonly dedupeKey?: (request: Request) => string;
   readonly stalePolicy?: StalePolicy;
 }
 
@@ -89,16 +90,18 @@ interface BatchDataSourceConfig<Request, Response> {
 
 ## `DeepPartial<T>`
 
-The shape of a `compute()` input and output patch. It recurses through objects, treats arrays as arrays of partial elements, preserves function values, and allows primitive leaves to be `undefined`.
+The shape of a `compute()` input and output patch. It recurses through objects, treats arrays as arrays of partial elements, preserves function and `Date` values atomically, and allows primitive leaves to be `undefined`.
 
 ```ts
 type DeepPartial<T> = T extends (...args: never[]) => unknown
   ? T
-  : T extends Array<infer U>
-    ? Array<DeepPartial<U>>
-    : T extends object
-      ? { [P in keyof T]?: DeepPartial<T[P]> }
-      : T | undefined;
+  : T extends Date
+    ? T
+    : T extends Array<infer U>
+      ? Array<DeepPartial<U>>
+      : T extends object
+        ? { [P in keyof T]?: DeepPartial<T[P]> }
+        : T | undefined;
 ```
 
 Use this when typing helpers that wrap `compute()`:

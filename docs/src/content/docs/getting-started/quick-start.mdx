@@ -105,6 +105,7 @@ const graph = createGraph<PricingForm>(
         query: async (entries) => {
           const res = await fetch("/api/pricing/batch", {
             method: "POST",
+            headers: { "Content-Type": "application/json" },
             body: JSON.stringify(entries.map((e) => e.request)),
           });
           const data = await res.json();

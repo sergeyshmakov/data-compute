@@ -24,6 +24,8 @@ const graph = createGraph<Form>({
 });
 ```
 
+Each formula has the type `Formula<State, Root, T>` and receives two arguments — `(state, root)`. The examples use only the first; the second gives access to the graph root, which matters inside `each()` where `state` is the item and `root` is the whole graph.
+
 Formulas have no side effects, no `this`, no implicit reactivity. They run when their inputs change.
 
 ## Auto-tracked dependencies

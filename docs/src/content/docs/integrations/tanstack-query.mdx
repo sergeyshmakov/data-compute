@@ -60,9 +60,13 @@ function CheckoutPage({ productId, quantity, basePrice }) {
       quantity,
       basePrice,
       pricing: pricingQuery.data,
-    }).then((patch) => {
-      if (active) setResult(patch as Form);
-    });
+    })
+      .then((patch) => {
+        if (active) setResult(patch as Form);
+      })
+      .catch(() => {
+        // Keep the last good result if a compute cycle rejects.
+      });
     return () => {
       active = false;
     };
@@ -111,7 +115,11 @@ When a TanStack mutation invalidates a query, you typically want the graph to re
 
 ```ts
 queryClient.getQueryCache().subscribe((event) => {
-  if (event.type === "updated" && event.query.queryKey[0] === "pricing") {
+  if (
+    event.type === "updated" &&
+    event.action?.type === "success" &&
+    event.query.queryKey[0] === "pricing"
+  ) {
     graph.compute({ pricing: event.query.state.data });
   }
 });

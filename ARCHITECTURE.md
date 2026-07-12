@@ -145,8 +145,11 @@ flowchart LR
 | [src/graph/compute-graph.ts](src/graph/compute-graph.ts) | `ComputeGraph` class — construction, `compute()`, `trace()`, introspection |
 | [src/graph/flatten.ts](src/graph/flatten.ts) | Deep tree to flat array conversion |
 | [src/graph/deps-maps.ts](src/graph/deps-maps.ts) | Dry-run builder for dependency/reverse mapping |
-| [src/tracking/proxy.ts](src/tracking/proxy.ts) | `trackingProxy`, `dryRunProxy`, `isProxy`, short-circuit array handling |
+| [src/graph/path-utils.ts](src/graph/path-utils.ts) | `getByPath`, `setByPath`, `expandRuntimePaths` — path traversal and each-expansion |
+| [src/graph/state-utils.ts](src/graph/state-utils.ts) | `cloneForCompute`, `mergeDeepPartial`, `deepFreezeSnapshot` |
+| [src/tracking/proxy.ts](src/tracking/proxy.ts) | `dryRunProxy`, `isProxy` — dependency-recording phantom proxy |
+| [src/tracking/readonly-snapshot.ts](src/tracking/readonly-snapshot.ts) | `readonlyTrackedSnapshot` — runtime read-tracking immutable snapshot |
 | [src/tracking/accessor.ts](src/tracking/accessor.ts) | `resolveAccessor` — resolves `(x) => x.total` to `"total"` via dry-run |
-| [src/dag/index.ts](src/dag/index.ts) | `topoSort`, `pathDependencies`, `normalizePath` |
+| [src/dag/index.ts](src/dag/index.ts) | `topoSort`, `pathDependencies`, `normalizePath`, `buildWildcardPrefixes` |
 | [src/batch/coordinator.ts](src/batch/coordinator.ts) | `BatchCoordinator` — microtask coalescing, deduplication, flush |
 | [src/types.ts](src/types.ts) | All shared types — `DeepFormulaMap`, `DataSourceMap`, `Graph`, etc. |
