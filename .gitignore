@@ -5,4 +5,5 @@ node_modules
 *.tgz
 dist
 test-results
+coverage
 tsconfig.tsbuildinfo
