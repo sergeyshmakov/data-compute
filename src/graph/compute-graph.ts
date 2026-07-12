@@ -689,6 +689,12 @@ class ComputeGraph<Root> implements Graph<Root> {
 			let result: unknown;
 			try {
 				result = await node.fn(localState, rootState);
+				// Materialize the result before recording dependencies. If the
+				// formula returned a snapshot object directly (e.g. `f.nested`), this
+				// deep-clone deproxies it — so no readonly tracking proxy leaks into
+				// state/output — and, by reading through the returned container, it
+				// records dependencies on any computed children it aliases.
+				result = cloneForCompute(result);
 			} catch (cause) {
 				didThrow = true;
 				caught = cause;
