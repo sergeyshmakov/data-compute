@@ -1,3 +1,7 @@
+// Keys that would pollute the prototype chain if assigned via [[Set]]. They are
+// never legitimate source fields, so merging/cloning skips them.
+const UNSAFE_KEYS = new Set(["__proto__", "constructor", "prototype"]);
+
 function isPlainObject(item: unknown): item is Record<string, unknown> {
 	return (
 		item !== null &&
@@ -94,6 +98,7 @@ function cloneFallback(
 	const output: Record<string, unknown> = {};
 	seen.set(value, output);
 	for (const [key, objectValue] of Object.entries(value)) {
+		if (UNSAFE_KEYS.has(key)) continue;
 		output[key] = cloneFallback(objectValue, seen);
 	}
 	return output;
@@ -140,7 +145,11 @@ export function mergeDeepPartial<T>(target: unknown, source: unknown): T {
 
 	if (isPlainObject(target) && isPlainObject(source)) {
 		const output: Record<string, unknown> = { ...target };
+		// Drop any prototype-polluting keys the spread copied from target, and
+		// never assign them from source (which would invoke the __proto__ setter).
+		for (const key of UNSAFE_KEYS) delete output[key];
 		for (const key of Object.keys(source)) {
+			if (UNSAFE_KEYS.has(key)) continue;
 			output[key] = mergeDeepPartial(target[key], source[key]);
 		}
 		return output as T;
