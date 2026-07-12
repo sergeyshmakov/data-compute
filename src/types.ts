@@ -50,7 +50,6 @@ export interface BatchDataSourceNode<State, Root, Request, Response> {
 
 export interface RequestDataSourceConfig<Request, Response> {
 	readonly query: (request: Request) => Promise<Response>;
-	readonly dedupeKey?: (request: Request) => string;
 	readonly stalePolicy?: StalePolicy;
 }
 
@@ -139,11 +138,13 @@ export type DataSourceMap<State, Root, Target> = [Target] extends [
 /** Deep partial to allow any fields to be omitted in inputs */
 export type DeepPartial<T> = T extends (...args: never[]) => unknown
 	? T
-	: T extends Array<infer U>
-		? _DeepPartialArray<U>
-		: T extends object
-			? _DeepPartialObject<T>
-			: T | undefined;
+	: T extends Date
+		? T
+		: T extends Array<infer U>
+			? _DeepPartialArray<U>
+			: T extends object
+				? _DeepPartialObject<T>
+				: T | undefined;
 
 interface _DeepPartialArray<T> extends Array<DeepPartial<T>> {}
 type _DeepPartialObject<T> = { [P in keyof T]?: DeepPartial<T[P]> };

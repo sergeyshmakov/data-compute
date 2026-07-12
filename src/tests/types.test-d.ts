@@ -183,6 +183,20 @@ describe("DataSourceMap types", () => {
 	});
 });
 
+describe("DeepPartial Date handling", () => {
+	interface WithDate {
+		when: Date;
+		label: string;
+	}
+
+	it("preserves Date atomically instead of making it a partial object", () => {
+		const graph = createGraph<WithDate>({ label: (_f) => "x" });
+		graph.compute({ when: new Date() });
+		// @ts-expect-error - Date must not accept a partial object literal
+		graph.compute({ when: {} });
+	});
+});
+
 describe("createGraph integration", () => {
 	it("returns Graph with correct root type", () => {
 		const graph = createGraph<DeepRoot>({
