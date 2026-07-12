@@ -59,6 +59,28 @@ interface ExecutionResult {
 	readonly shouldRetry: boolean;
 }
 
+/**
+ * Per-run topology state, threaded through a run instead of stored on the graph
+ * so overlapping (superseded) runs never corrupt each other's ordering.
+ * `working` maps each node to the deps it actually read this run (seeded from
+ * the static superset for nodes that haven't run yet); `ran` is the set of
+ * nodes that have recorded their real reads this run.
+ */
+interface RunTopology {
+	readonly working: Map<string, Set<string>>;
+	readonly ran: Set<string>;
+}
+
+function cloneDeps(deps: Map<string, Set<string>>): Map<string, Set<string>> {
+	return new Map([...deps].map(([key, set]) => [key, new Set(set)]));
+}
+
+function sameSet(a: ReadonlySet<string>, b: ReadonlySet<string>): boolean {
+	if (a.size !== b.size) return false;
+	for (const value of a) if (!b.has(value)) return false;
+	return true;
+}
+
 type StaleAction<Root> =
 	| { readonly status: "fresh" }
 	| { readonly status: "stale" }
@@ -85,6 +107,12 @@ class ComputeGraph<Root> implements Graph<Root> {
 	private _order: readonly string[];
 	private _hasCycle: boolean;
 
+	// Static (dry-run) deps, frozen at construction. Each run seeds its working
+	// topology from here so cross-run discoveries never accumulate into a false
+	// cycle across mutually-exclusive branches.
+	private readonly staticDeps: Map<string, Set<string>>;
+	// Accumulated discovered deps — the superset surfaced by introspection
+	// (deps/dependents/toMermaid/trace). Not used for per-run ordering.
 	private depsMap: Map<string, Set<string>>;
 	private reverseMap: Map<string, Set<string>>;
 	private readonly flatNodes: FlatNode[];
@@ -152,7 +180,8 @@ class ComputeGraph<Root> implements Graph<Root> {
 		);
 
 		// Static dependency extraction
-		this.depsMap = buildDepsMap(this.flatNodes);
+		this.staticDeps = buildDepsMap(this.flatNodes);
+		this.depsMap = cloneDeps(this.staticDeps);
 		this.reverseMap = buildReverseDepsMap(this.depsMap);
 
 		const allPaths = this.flatNodes.map((n) => n.path);
@@ -294,6 +323,15 @@ class ComputeGraph<Root> implements Graph<Root> {
 		runCoordinators: Set<BatchCoordinator>,
 	): Promise<DeepPartial<Root>> {
 		let runtimeDependencyRetries = 0;
+		// Per-run topology, seeded from the static superset. Persists across this
+		// run's attempts (so reads discovered on attempt N inform attempt N+1) but
+		// never leaks into another run. Reset the shared order to the static order
+		// so this run's first attempt doesn't inherit a prior run's branch order.
+		const topo: RunTopology = {
+			working: cloneDeps(this.staticDeps),
+			ran: new Set<string>(),
+		};
+		this._order = topoSort([...this.computedKeys], topo.working).order;
 		while (true) {
 			let shouldRetryForRuntimeDeps = false;
 			// Effective stale policy of the node that triggered a runtime-dependency
@@ -372,6 +410,7 @@ class ComputeGraph<Root> implements Graph<Root> {
 									itemPath,
 									attemptIndex,
 									orderIndex,
+									topo,
 								);
 								return {
 									status: "ready",
@@ -443,6 +482,7 @@ class ComputeGraph<Root> implements Graph<Root> {
 							undefined,
 							attemptIndex,
 							orderIndex,
+							topo,
 						);
 
 						if (execution.shouldRetry) {
@@ -658,6 +698,7 @@ class ComputeGraph<Root> implements Graph<Root> {
 		itemPath: string | undefined,
 		attemptIndex: ReadonlyMap<string, number>,
 		orderIndex: number,
+		topo: RunTopology,
 	): Promise<ExecutionResult> {
 		const accessed = new Set<string>();
 		const rootSnapshot = cloneForCompute(state);
@@ -700,6 +741,7 @@ class ComputeGraph<Root> implements Graph<Root> {
 				accessed,
 				attemptIndex,
 				orderIndex,
+				topo,
 			);
 			if (!shouldRetry) {
 				// Gate on the deps ACTUALLY read this run, not the accumulated
@@ -744,6 +786,7 @@ class ComputeGraph<Root> implements Graph<Root> {
 			accessed,
 			attemptIndex,
 			orderIndex,
+			topo,
 		);
 		if (shouldRetry) return { result: undefined, shouldRetry: true };
 		if (requestThrew) throw requestError;
@@ -797,47 +840,66 @@ class ComputeGraph<Root> implements Graph<Root> {
 		accessed: Set<string>,
 		attemptIndex: ReadonlyMap<string, number>,
 		orderIndex: number,
+		topo: RunTopology,
 	): boolean {
-		const runtimeDeps = this.actualDeps(node, accessed);
-		const currentDeps = this.depsMap.get(node.path) ?? new Set<string>();
-		const addedDeps: string[] = [];
-		const addedComputedDeps: string[] = [];
+		const actual = this.actualDeps(node, accessed);
 
-		for (const dep of runtimeDeps) {
-			if (!currentDeps.has(dep)) {
-				addedDeps.push(dep);
-				if (this.flatNodeByPath.has(dep)) addedComputedDeps.push(dep);
+		// Introspection: accumulate the discovered superset (deps/dependents/…).
+		const introCurrent = this.depsMap.get(node.path) ?? new Set<string>();
+		let introChanged = false;
+		for (const dep of actual) {
+			if (!introCurrent.has(dep)) {
+				introChanged = true;
+				break;
 			}
 		}
-
-		if (addedDeps.length === 0) return false;
-
-		this.depsMap.set(node.path, new Set([...currentDeps, ...addedDeps]));
-		this.reverseMap = buildReverseDepsMap(this.depsMap);
-
-		if (addedComputedDeps.length === 0) return false;
-
-		this.refreshTopology();
-
-		return addedComputedDeps.some((dep) => {
-			const depIndex = attemptIndex.get(dep);
-			return (
-				depIndex === undefined ||
-				depIndex > orderIndex ||
-				this.nodeStatus.get(dep) === "error"
-			);
-		});
-	}
-
-	private refreshTopology(): void {
-		this.reverseMap = buildReverseDepsMap(this.depsMap);
-		const { order, hasCycle } = topoSort([...this.computedKeys], this.depsMap);
-		this._hasCycle = hasCycle;
-
-		if (hasCycle) {
-			throw new RuntimeDependencyCycleError();
+		if (introChanged) {
+			this.depsMap.set(node.path, new Set([...introCurrent, ...actual]));
+			this.reverseMap = buildReverseDepsMap(this.depsMap);
 		}
 
+		// Execution topology: replace this node's working edges with what it
+		// actually read this run (branch-aware), then re-sort. Unlike the
+		// accumulated map, this never unions mutually-exclusive branches into a
+		// false cycle.
+		const prevWorking = topo.working.get(node.path) ?? new Set<string>();
+		topo.working.set(node.path, actual);
+		topo.ran.add(node.path);
+		if (!sameSet(prevWorking, actual)) {
+			this.refreshRunTopology(topo);
+		}
+
+		// Retry if a computed dep was read before it was produced this run. Errored
+		// deps are not retried here — the actual-reads gate raises the dependency
+		// error once ordering has settled.
+		for (const dep of actual) {
+			if (!this.flatNodeByPath.has(dep)) continue;
+			const depIndex = attemptIndex.get(dep);
+			if (depIndex === undefined || depIndex > orderIndex) return true;
+		}
+		return false;
+	}
+
+	private refreshRunTopology(topo: RunTopology): void {
+		let { order, hasCycle } = topoSort([...this.computedKeys], topo.working);
+		if (hasCycle) {
+			// A cycle in the working map may be a false union of mutually-exclusive
+			// branches: edges from nodes that haven't run this run are still the
+			// static superset and may belong to an untaken branch. Drop those and
+			// re-sort. A cycle that survives among confirmed (already-run) edges is
+			// a genuine runtime cycle.
+			const confirmed = new Map<string, Set<string>>();
+			for (const key of this.computedKeys) {
+				confirmed.set(
+					key,
+					topo.ran.has(key)
+						? (topo.working.get(key) ?? new Set<string>())
+						: new Set<string>(),
+				);
+			}
+			({ order, hasCycle } = topoSort([...this.computedKeys], confirmed));
+			if (hasCycle) throw new RuntimeDependencyCycleError();
+		}
 		this._order = order;
 	}
 
