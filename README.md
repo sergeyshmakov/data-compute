@@ -53,7 +53,13 @@ A TypeScript-first computation graph engine. Define each derived value as a pure
 npm install data-compute
 ```
 
-Requirements: Node `>=20`, TypeScript `>=5.0`
+Requirements: Node `>=20`, TypeScript `>=5.0`.
+
+> **TypeScript `lib` note:** the public types reference the standard `AbortSignal`
+> global (via the batch query `meta.signal`). This is available by default in
+> Node projects (`@types/node`) and browser projects (the `DOM` lib). If you
+> compile with an explicit `lib` that excludes both, add `"DOM"` (or `@types/node`)
+> to your `tsconfig`, or enable `skipLibCheck`.
 
 ## Quick start
 
