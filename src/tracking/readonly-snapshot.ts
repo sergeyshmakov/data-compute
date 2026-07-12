@@ -73,6 +73,13 @@ export function readonlyTrackedSnapshot<T>(
 		return value;
 	}
 
+	// Binary buffers are atomic values: a Proxy can't wrap them (their length
+	// getter/indexed access require the real receiver), so return them as-is.
+	// The dependency on the containing path is already recorded by the parent.
+	if (ArrayBuffer.isView(value) || value instanceof ArrayBuffer) {
+		return value;
+	}
+
 	const objectValue = value as object;
 	let byPath = cache.get(objectValue);
 	if (!byPath) {
@@ -182,6 +189,15 @@ function trackedMapMember(
 		};
 	}
 
+	if (prop === "has") {
+		return (mapKey: unknown) => {
+			// A has() check depends on the presence of the specific entry, so
+			// record its path just like get() does.
+			deps.add(pathJoin(path, String(mapKey)));
+			return map.has(mapKey);
+		};
+	}
+
 	if (prop === "entries")
 		return () => trackedMapEntries(map, deps, path, cache);
 	if (prop === "values") return () => trackedMapValues(map, deps, path, cache);
@@ -228,6 +244,15 @@ function trackedSetMember(
 	proxy: unknown,
 ): unknown {
 	if (SET_MUTATORS.has(prop)) return throwReadonlySnapshotMutation;
+
+	if (prop === "has") {
+		return (setValue: unknown) => {
+			// Record membership of the specific value so adding/removing it
+			// invalidates dependents.
+			deps.add(pathJoin(path, String(setValue)));
+			return set.has(setValue);
+		};
+	}
 
 	if (prop === "entries")
 		return () => trackedSetEntries(set, deps, path, cache);

@@ -11,112 +11,6 @@ export function isProxy(value: unknown): value is object {
 }
 
 /**
- * Short-circuiting Array methods that must touch every element during
- * dependency tracking so we don't miss conditional accesses.
- */
-const SHORT_CIRCUIT_METHODS = new Set([
-	"find",
-	"findIndex",
-	"findLast",
-	"findLastIndex",
-	"some",
-	"every",
-]);
-
-/** Records access to every element (and its first-level props) of an array. */
-function touchArrayElements(
-	arr: unknown[],
-	deps: Set<string>,
-	path: string,
-): void {
-	for (let i = 0; i < arr.length; i++) {
-		const elemPath = `${path}.${i}`;
-		deps.add(elemPath);
-		const elem = arr[i];
-		if (elem !== null && typeof elem === "object") {
-			for (const k of Object.keys(elem as object)) {
-				deps.add(`${elemPath}.${k}`);
-			}
-		}
-	}
-}
-
-/**
- * Wraps `target` in a recursive Proxy that records every property-path
- * access into `deps`. Works on real runtime data.
- */
-export function trackingProxy<T extends object>(
-	target: T,
-	deps: Set<string>,
-	path = "",
-	cache = new WeakMap<object, unknown>(),
-): T {
-	const existing = cache.get(target);
-	if (existing) return existing as T;
-
-	const proxy = new Proxy(target, {
-		get(obj, prop, receiver) {
-			if (prop === IS_PROXY) return true;
-			if (prop === PROXY_PATH) return path;
-
-			// Pass-through symbols (iterator, toPrimitive, etc.)
-			if (typeof prop === "symbol") {
-				const val = Reflect.get(obj, prop, receiver);
-				return typeof val === "function" ? val.bind(obj) : val;
-			}
-
-			const key = path ? `${path}.${prop}` : prop;
-			deps.add(key);
-
-			const reflectReceiver =
-				obj instanceof Map || obj instanceof Set ? obj : receiver;
-			const value = Reflect.get(obj, prop, reflectReceiver);
-
-			if (value instanceof Map) {
-				return trackingProxy(value, deps, key, cache);
-			}
-
-			if (value instanceof Set) {
-				return trackingProxy(value, deps, key, cache);
-			}
-
-			if (obj instanceof Map && typeof value === "function") {
-				return value.bind(obj);
-			}
-
-			if (obj instanceof Set && typeof value === "function") {
-				return value.bind(obj);
-			}
-
-			if (obj instanceof Date && typeof value === "function") {
-				return value.bind(obj);
-			}
-
-			// Wrap short-circuiting array methods to touch all elements first
-			if (
-				Array.isArray(obj) &&
-				typeof value === "function" &&
-				SHORT_CIRCUIT_METHODS.has(prop)
-			) {
-				return (...args: unknown[]) => {
-					touchArrayElements(obj, deps, path);
-					const proxied = trackingProxy(obj, deps, path, cache);
-					// value is the array method from Reflect.get; use it directly
-					return (value as (...a: unknown[]) => unknown).apply(proxied, args);
-				};
-			}
-
-			if (value !== null && typeof value === "object") {
-				return trackingProxy(value as object, deps, key, cache);
-			}
-			return value;
-		},
-	});
-	cache.set(target, proxy);
-	return proxy;
-}
-
-/**
  * Produces a "phantom" proxy for the dry-run dependency extraction pass.
  * Every property access is recorded. No real data is needed — the proxy
  * returns safe defaults for primitive coercions and nested proxies for
@@ -153,7 +47,33 @@ export function dryRunProxy(deps: Set<string>, path = ""): unknown {
 			if (prop === "then") return undefined;
 			return dryRunProxy(deps, key);
 		},
-		apply() {
+		apply(_target, _thisArg, args) {
+			// This proxy stands in for a method call such as
+			// `items.reduce((sum, item) => sum + item.total, 0)`. The callback is
+			// never run by the native method (there is no real array), so invoke
+			// it with element proxies to record the property reads inside it.
+			// The element lives one segment above the method path
+			// (`items.reduce` -> element under `items`); we pass the proxy in the
+			// first two argument slots so it lands on the element parameter for
+			// both `(value, index)` callbacks and reduce's `(acc, value)` form.
+			const dotIndex = path.lastIndexOf(".");
+			const parentPath = dotIndex === -1 ? "" : path.slice(0, dotIndex);
+			const elementPath = parentPath ? `${parentPath}.0` : "0";
+			for (const arg of args) {
+				if (typeof arg === "function") {
+					const element = dryRunProxy(deps, elementPath);
+					try {
+						(arg as (...callbackArgs: unknown[]) => unknown)(
+							element,
+							element,
+							0,
+						);
+					} catch {
+						// Callback threw against the phantom proxy; reads before the
+						// throw are already recorded.
+					}
+				}
+			}
 			return dryRunProxy(deps, path);
 		},
 		has() {

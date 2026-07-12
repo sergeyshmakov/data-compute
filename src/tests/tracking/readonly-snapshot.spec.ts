@@ -47,6 +47,26 @@ describe("readonlyTrackedSnapshot dependency tracking", () => {
 		expect(deps.has("m.y")).toBe(false);
 	});
 
+	it("records the specific key checked via Map.has", () => {
+		const deps = new Set<string>();
+		const m = new Map<string, number>([["x", 1]]);
+		const snap = readonlyTrackedSnapshot({ m }, deps, "") as Any;
+
+		expect(snap.m.has("x")).toBe(true);
+		expect(snap.m.has("z")).toBe(false);
+		expect(deps.has("m.x")).toBe(true);
+		expect(deps.has("m.z")).toBe(true);
+	});
+
+	it("records the specific value checked via Set.has", () => {
+		const deps = new Set<string>();
+		const s = new Set<string>(["a"]);
+		const snap = readonlyTrackedSnapshot({ s }, deps, "") as Any;
+
+		expect(snap.s.has("a")).toBe(true);
+		expect(deps.has("s.a")).toBe(true);
+	});
+
 	it("tracks aliased objects under their distinct paths", () => {
 		const shared = { value: 1 };
 		const deps = new Set<string>();
