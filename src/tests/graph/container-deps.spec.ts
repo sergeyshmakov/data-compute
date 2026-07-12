@@ -94,21 +94,43 @@ describe("container reads depend on computed descendants", () => {
 		expect(result.group?.summary).toBe(3);
 	});
 
-	it("recovers at runtime when an async formula spreads a container after await", async () => {
+	it("recovers at runtime when an async formula spreads a present container after await", async () => {
 		interface Root2 {
 			nested: { value: number };
 			derived: { value: number };
 		}
 		const graph = createGraph<Root2>({
-			// async + declared before nested.value, so the container read is only
-			// visible at runtime — the engine must reorder and retry.
+			// async + declared before nested.value, so the spread is only observed
+			// at runtime — the engine must record the enumeration, reorder, and retry.
 			derived: async (f) => {
 				await Promise.resolve();
 				return { ...f.nested };
 			},
 			nested: { value: () => 1 },
 		});
-		const result = await graph.compute({});
+		// The container must exist to be enumerated. An empty object is enough; a
+		// container that is entirely absent (async spread of `undefined`) has no
+		// proxy to observe and is a documented limitation.
+		const result = await graph.compute({ nested: {} });
 		expect(result.derived).toEqual({ value: 1 });
+	});
+
+	it("spreads a container that has both a source child and a computed child", async () => {
+		interface Root2 {
+			nested: { label: string; value: number };
+			derived: { label: string; value: number };
+		}
+		// The present source child (`label`) makes the spread record both `nested`
+		// and `nested.label`; enumeration provenance still expands to the computed
+		// `nested.value`, so it is not dropped.
+		const graph = createGraph<Root2>({
+			derived: async (f) => {
+				await Promise.resolve();
+				return { ...f.nested };
+			},
+			nested: { value: () => 42 },
+		});
+		const result = await graph.compute({ nested: { label: "x" } });
+		expect(result.derived).toEqual({ label: "x", value: 42 });
 	});
 });

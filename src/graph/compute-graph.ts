@@ -5,6 +5,7 @@ import {
 	topoSort,
 } from "../dag/index.js";
 import { resolveAccessor } from "../tracking/accessor.js";
+import { enumeratedPaths } from "../tracking/enumeration.js";
 import { readonlyTrackedSnapshot } from "../tracking/readonly-snapshot.js";
 import type {
 	BatchDataSourceConfig,
@@ -692,7 +693,7 @@ class ComputeGraph<Root> implements Graph<Root> {
 		// f.nested) must still depend on computed descendants so it reorders and
 		// retries instead of committing stale/empty container data.
 		for (const descendant of containerDescendants(
-			accessed,
+			enumeratedPaths(accessed),
 			node.path,
 			this.computedKeys,
 			this.wildcardPrefixes,

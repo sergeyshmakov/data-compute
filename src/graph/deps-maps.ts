@@ -3,6 +3,7 @@ import {
 	normalizePath,
 	pathDependencies,
 } from "../dag/index.js";
+import { enumeratedPaths } from "../tracking/enumeration.js";
 import { dryRunProxy } from "../tracking/proxy.js";
 import type { FlatNode } from "./flatten.js";
 
@@ -15,45 +16,28 @@ function isThenable(value: unknown): value is PromiseLike<unknown> {
 }
 
 /**
- * Given the paths a formula actually read, returns the computed nodes it depends
- * on by virtue of reading a whole container.
+ * Returns the computed nodes a formula depends on by virtue of *enumerating* a
+ * container (object spread, `Object.keys`, `for...in`). Enumeration means the
+ * formula reads the whole container, so it depends on every computed descendant
+ * — including ones not yet present in state when the spread ran.
  *
- * A "container read" is a maximal accessed path — one with no deeper accessed
- * path beneath it. Reading `{ ...f.nested }` records only `nested` (maximal), so
- * it depends on every computed descendant (`nested.value`, ...). A leaf read
- * like `f.nested.value` records `nested` AND `nested.value`; only the latter is
- * maximal, so `nested` is treated as incidental traversal and is NOT expanded —
- * which avoids pulling in unrelated computed siblings (and the false cycles that
- * would create).
- *
- * Callers must pass the dry-run/runtime accessed set only, never the injected
- * ancestor paths, or independent siblings would be linked.
+ * `enumerated` is the set of enumerated container paths recorded by the proxy's
+ * `ownKeys` trap. A plain property read (`f.nested.value`) does not enumerate,
+ * so it is not here and its unrelated siblings are never pulled in. This
+ * distinguishes a genuine whole-container read from incidental traversal via
+ * access-mode provenance rather than a path-shape heuristic.
  */
 export function containerDescendants(
-	accessed: Iterable<string>,
+	enumerated: Iterable<string>,
 	self: string,
 	nodePaths: Iterable<string>,
 	wildcardPrefixes?: ReadonlySet<string>,
 ): Set<string> {
-	const normalized = new Set<string>();
-	for (const path of accessed) {
-		normalized.add(normalizePath(path, wildcardPrefixes));
-	}
-
 	const result = new Set<string>();
 	const nodes = [...nodePaths];
-	for (const containerPath of normalized) {
-		const prefix = `${containerPath}.`;
-		// Only maximal paths represent a whole-container read.
-		let hasDeeper = false;
-		for (const other of normalized) {
-			if (other !== containerPath && other.startsWith(prefix)) {
-				hasDeeper = true;
-				break;
-			}
-		}
-		if (hasDeeper) continue;
-
+	for (const rawPath of enumerated) {
+		const containerPath = normalizePath(rawPath, wildcardPrefixes);
+		const prefix = containerPath ? `${containerPath}.` : "";
 		for (const candidate of nodes) {
 			if (candidate !== self && candidate.startsWith(prefix)) {
 				result.add(candidate);
@@ -101,11 +85,10 @@ export function buildDepsMap(nodes: FlatNode[]): Map<string, Set<string>> {
 			// Sync accesses are already captured.
 		}
 
-		// Reading a whole container depends on its computed descendants. Compute
-		// this from the dry-run accesses only, before injecting ancestor paths
-		// below (injected ancestors must not be treated as container reads).
+		// Enumerating a whole container (spread / Object.keys) depends on its
+		// computed descendants, even ones not present during the dry run.
 		const descendants = containerDescendants(
-			accessed,
+			enumeratedPaths(accessed),
 			node.path,
 			nodePaths,
 			wildcardPrefixes,

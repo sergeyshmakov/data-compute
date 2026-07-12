@@ -1,3 +1,5 @@
+import { markEnumerated } from "./enumeration.js";
+
 // Symbols for proxy detection (module-private)
 const IS_PROXY = Symbol("data-compute:is-proxy");
 const PROXY_PATH = Symbol("data-compute:path");
@@ -85,8 +87,19 @@ export function dryRunProxy(deps: Set<string>, path = ""): unknown {
 			}
 			return dryRunProxy(deps, path);
 		},
-		has() {
+		has(_target, prop) {
+			// An `in` check depends on whether the probed key exists, which for a
+			// computed key means depending on that node. Record it.
+			if (typeof prop === "string") {
+				deps.add(path ? `${path}.${prop}` : prop);
+			}
 			return true;
+		},
+		ownKeys(target) {
+			// Enumeration (spread / Object.keys / for-in) means the formula depends
+			// on the whole container, including computed children not yet present.
+			markEnumerated(deps, path);
+			return Reflect.ownKeys(target);
 		},
 	});
 }

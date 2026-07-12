@@ -1,3 +1,5 @@
+import { markEnumerated } from "./enumeration.js";
+
 const ARRAY_SHORT_CIRCUIT_METHODS = new Set<PropertyKey>([
 	"find",
 	"findIndex",
@@ -161,6 +163,18 @@ export function readonlyTrackedSnapshot<T>(
 			if (typeof nestedValue === "function") return nestedValue;
 
 			return readonlyTrackedSnapshot(nestedValue, deps, key, cache);
+		},
+		has(target, prop) {
+			// `key in snapshot` depends on whether the key exists; for a computed
+			// key that means depending on that node. Record the probed path.
+			if (typeof prop === "string") deps.add(pathJoin(path, prop));
+			return Reflect.has(target, prop);
+		},
+		ownKeys(target) {
+			// Enumeration (spread / Object.keys / for-in) means the formula depends
+			// on the whole container, including computed children not yet present.
+			markEnumerated(deps, path);
+			return Reflect.ownKeys(target);
 		},
 		set() {
 			return throwReadonlySnapshotMutation();
