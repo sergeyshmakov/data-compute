@@ -13,6 +13,13 @@ describe("release configuration", () => {
 		expect(workflow).not.toMatch(/\bNPM_TOKEN\b|\bNODE_AUTH_TOKEN\b/);
 	});
 
+	it("bootstraps the first release as 0.1.0", () => {
+		const workflow = read(".github/workflows/publish.yml");
+		// The bootstrap step must refuse any first-release version other than 0.1.0.
+		expect(workflow).toMatch(/"\$\{VERSION\}"\s*!=\s*"0\.1\.0"/);
+		expect(workflow).toMatch(/first release must be 0\.1\.0/);
+	});
+
 	it("keeps Dependabot npm dependency-type filters under allow", () => {
 		const dependabot = read(".github/dependabot.yml");
 		const npmBlocks = dependabot

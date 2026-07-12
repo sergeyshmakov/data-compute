@@ -54,8 +54,10 @@ jobs:
           PACKAGE_NAME="$(node -p "require('./package.json').name")"
           TAG="v${VERSION}"
 
-          if [[ "${VERSION}" == 1.* ]]; then
-            echo "Refusing to bootstrap ${PACKAGE_NAME}@${VERSION}; initial release must stay in 0.x."
+          # The first release is published manually as 0.1.0; the bootstrap only
+          # tags that exact version so semantic-release then continues from it.
+          if [[ "${VERSION}" != "0.1.0" ]]; then
+            echo "Refusing to bootstrap ${PACKAGE_NAME}@${VERSION}: the first release must be 0.1.0. Set package.json version to 0.1.0 and publish it manually before bootstrapping."
             exit 1
           fi
 
