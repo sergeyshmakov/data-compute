@@ -1,0 +1,87 @@
+---
+title: MobX integration
+description: Wiring data-compute into a MobX observable store.
+---
+
+## Pattern
+
+MobX owns the state. `data-compute` reads via `getState`, writes back via `setState` wrapped in `runInAction`.
+
+```ts
+import { observable, runInAction } from "mobx";
+import { createGraph } from "data-compute";
+
+interface OrderForm {
+  quantity: number;
+  unitPrice: number;
+  taxRate: number;
+  discount: number;
+  subtotal: number;
+  tax: number;
+  total: number;
+}
+
+const form = observable<OrderForm>({
+  quantity: 1,
+  unitPrice: 20,
+  taxRate: 0.1,
+  discount: 0,
+  subtotal: 20,
+  tax: 2,
+  total: 22,
+});
+
+const graph = createGraph<OrderForm>(
+  {
+    subtotal: (f) => f.quantity * f.unitPrice,
+    tax:      (f) => f.subtotal * f.taxRate,
+    total:    (f) => f.subtotal + f.tax - f.discount,
+  },
+  undefined,
+  {
+    getState: () => form,
+    setState: (patch) => {
+      runInAction(() => Object.assign(form, patch));
+    },
+  },
+);
+
+// User updates a field
+graph.compute({ quantity: 5 });
+// MobX observers re-render with subtotal, tax, total updated atomically
+```
+
+## Why `getState` matters here
+
+MobX is reactive — observers track which fields they read. If you spread the entire form into `compute()`, you trigger MobX dependency tracking on every field. With `getState`, the graph reads the store snapshot itself, outside of any observer.
+
+## `runInAction` for atomic updates
+
+Wrapping `Object.assign` in `runInAction` ensures all observers fire once at the end of the update, not once per field. Without it, components observing `subtotal`, `tax`, and `total` would each rerender three times instead of once.
+
+## Triggering from user input
+
+```tsx
+import { observer } from "mobx-react-lite";
+
+const QuantityInput = observer(() => (
+  <input
+    type="number"
+    value={form.quantity}
+    onChange={(e) => graph.compute({ quantity: Number(e.target.value) })}
+  />
+));
+```
+
+Note: `compute()` returns a promise, but you don't have to await it — `setState` wires the result back into the store, and MobX observers re-render when those fields change.
+
+## Multiple inputs in one tick
+
+If multiple form fields change in the same microtask, the compute calls are coalesced — one DAG execution, one `setState` call, one MobX update.
+
+```ts
+graph.compute({ quantity: 5 });
+graph.compute({ unitPrice: 25 });
+graph.compute({ discount: 2 });
+// → one runInAction, one rerender
+```

@@ -1,0 +1,145 @@
+---
+title: Types reference
+description: Public type exports and their semantics.
+---
+
+## `Graph<T>`
+
+A computation graph parameterized by its root state type.
+
+```ts
+interface Graph<T> {
+  compute(input: ComputeInput<T>): Promise<DeepPartial<T>>;
+
+  readonly computedKeys: readonly string[];
+  readonly nodes: readonly string[];
+  readonly sourceKeys: readonly string[];
+  readonly sources: readonly string[];
+  readonly order: readonly string[];
+  readonly hasCycle: boolean;
+
+  status(path: string): NodeStatus;
+  computeStatus<U>(accessor: NodeAccessor<T, U>): NodeStatus;
+  snapshot<U = unknown>(path: string): NodeSnapshot<U>;
+  computeSnapshot<U>(accessor: NodeAccessor<T, U>): NodeSnapshot<U>;
+  computeResult<U>(accessor: NodeAccessor<T, U>): {
+    readonly value: U | undefined;
+    readonly status: NodeStatus;
+  };
+
+  deps<U>(accessor: NodeAccessor<T, U>): readonly string[];
+  dependents<U>(accessor: NodeAccessor<T, U>): readonly string[];
+  toMermaid(): string;
+  trace(input: ComputeInput<T>): readonly TraceStep[];
+}
+```
+
+## `NodeStatus`
+
+```ts
+type NodeStatus = "ready" | "stale" | "pending" | "error";
+```
+
+| Status | Meaning |
+|---|---|
+| `"ready"` | The node has a computed value as of the current cycle. |
+| `"pending"` | The node or one of its dependencies is awaiting an async resolution. |
+| `"stale"` | The node's last result was invalidated by an input change before completion. |
+| `"error"` | The node's formula or data source threw. |
+
+## `NodeSnapshot<U>`
+
+```ts
+type NodeSnapshot<U> =
+  | { readonly status: "ready"; readonly value: U }
+  | { readonly status: "stale"; readonly value: U }
+  | { readonly status: "pending" }
+  | { readonly status: "error"; readonly error: unknown };
+```
+
+`snapshot(path)` returns this discriminated union for path-based status reads;
+`computeSnapshot(accessor)` returns the same union for typed accessor-based reads.
+
+## Data source node types
+
+Users normally create these through `request()` and `batchRequest()`.
+
+```ts
+type DataSourceNode<State, Root, Response> =
+  | BatchDataSourceNode<State, Root, any, Response>
+  | RequestDataSourceNode<State, Root, any, Response>;
+```
+
+The public config types are:
+
+```ts
+interface RequestDataSourceConfig<Request, Response> {
+  readonly query: (request: Request) => Promise<Response>;
+  readonly stalePolicy?: StalePolicy;
+}
+
+interface BatchDataSourceConfig<Request, Response> {
+  readonly query: (
+    entries: readonly BatchEntry<Request>[],
+    meta: BatchQueryMeta,
+  ) => Promise<readonly BatchOutcome<Response>[]>;
+  readonly dedupeKey?: (request: Request) => string;
+  readonly stalePolicy?: StalePolicy;
+}
+```
+
+## `DeepPartial<T>`
+
+The shape of a `compute()` input and output patch. It recurses through objects, treats arrays as arrays of partial elements, preserves function and `Date` values atomically, and allows primitive leaves to be `undefined`.
+
+```ts
+type DeepPartial<T> = T extends (...args: never[]) => unknown
+  ? T
+  : T extends Date
+    ? T
+    : T extends Array<infer U>
+      ? Array<DeepPartial<U>>
+      : T extends object
+        ? { [P in keyof T]?: DeepPartial<T[P]> }
+        : T | undefined;
+```
+
+Use this when typing helpers that wrap `compute()`:
+
+```ts
+function applyOrderUpdate(patch: DeepPartial<OrderForm>) {
+  return graph.compute(patch);
+}
+```
+
+## `NodeAccessor<T, U>`
+
+A lambda that extracts a node path from the root state. Used by `deps`, `dependents`, `computeStatus`, and `computeResult`.
+
+```ts
+type NodeAccessor<T, U> = (state: T) => U;
+
+graph.computeStatus((f) => f.subtotal);
+graph.deps((f) => f.tax);
+```
+
+The function is evaluated against a recording proxy, not real application state.
+
+## `TraceStep`
+
+```ts
+interface TraceStep {
+  readonly node: string;
+  readonly deps: Record<string, unknown>;
+  readonly result: unknown;
+  readonly ms: number;
+}
+```
+
+`trace(input)` is intended for debugging synchronous execution and dependency values. Async results are reported as `"[async]"`.
+
+## Inference notes
+
+- `createGraph<T>(formulas)` checks formula return types against the declared `T` fields.
+- `compute()` resolves to `DeepPartial<T>` because the graph returns a cycle patch, not a full root state.
+- `CyclicMode` currently supports only `"error"`; cyclic scheduling is deferred.

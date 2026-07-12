@@ -1,0 +1,156 @@
+import type {
+	BatchDataSourceConfig,
+	BatchEntry,
+	BatchFailure,
+	BatchSuccess,
+} from "../types.js";
+
+interface PendingRequest {
+	id: string;
+	request: unknown;
+	resolve: (value: unknown) => void;
+	reject: (error: unknown) => void;
+}
+
+/**
+ * Collects `batchRequest` resolutions within a microtask and flushes them as a
+ * single batched query per data source. Supports deduplication via `dedupeKey`.
+ * Uses config.query (a function) as Map key; typed as object to avoid variance.
+ */
+export class BatchCoordinator {
+	private pending = new Map<object, PendingRequest[]>();
+	private configs = new Map<object, BatchDataSourceConfig<unknown, unknown>>();
+
+	private flushScheduled = false;
+	private nextId = 0;
+	private controllers = new Set<AbortController>();
+	private aborted = false;
+
+	submit<Req, Res>(
+		config: BatchDataSourceConfig<Req, Res>,
+		request: Req,
+	): Promise<Res> {
+		return new Promise((resolve, reject) => {
+			const id = String(++this.nextId);
+			// Key channels by config identity, not config.query: two configs that
+			// share a query fn but differ in dedupeKey must not be merged into one
+			// channel (which would apply one config's dedupe rule to the other).
+			const key = config as object;
+			let list = this.pending.get(key);
+			if (!list) {
+				list = [];
+				this.pending.set(key, list);
+				this.configs.set(
+					key,
+					config as BatchDataSourceConfig<unknown, unknown>,
+				);
+			}
+			list.push({
+				id,
+				request,
+				resolve: resolve as (value: unknown) => void,
+				reject,
+			});
+			this.scheduleFlush();
+		});
+	}
+
+	abort(): void {
+		// Remember the abort: a channel whose AbortController has not been created
+		// yet (submit queued flush, but flushChannel has not run) would otherwise
+		// receive a fresh, non-aborted signal and keep running.
+		this.aborted = true;
+		for (const controller of this.controllers) {
+			controller.abort();
+		}
+		this.controllers.clear();
+	}
+
+	private scheduleFlush(): void {
+		if (this.flushScheduled) return;
+		this.flushScheduled = true;
+		queueMicrotask(() => this.flush());
+	}
+
+	private async flush(): Promise<void> {
+		this.flushScheduled = false;
+		const snapshotPending = new Map(this.pending);
+		const snapshotConfigs = new Map(this.configs);
+
+		this.pending.clear();
+		this.configs.clear();
+
+		for (const [channelKey, entries] of snapshotPending) {
+			const config = snapshotConfigs.get(channelKey);
+			if (config) await this.flushChannel(config, entries);
+		}
+	}
+
+	private async flushChannel(
+		config: BatchDataSourceConfig<unknown, unknown>,
+		entries: PendingRequest[],
+	): Promise<void> {
+		const batchEntries: BatchEntry<unknown>[] = [];
+		const receivers = new Map<string, PendingRequest[]>(); // batchId → original entries
+
+		if (config.dedupeKey) {
+			const seen = new Map<string, string>(); // dedupeKey → batch entry id
+			try {
+				for (const e of entries) {
+					const dk = config.dedupeKey(e.request);
+					const existingId = seen.get(dk);
+					if (existingId !== undefined) {
+						const arr = receivers.get(existingId);
+						if (arr) arr.push(e);
+					} else {
+						seen.set(dk, e.id);
+						batchEntries.push({ id: e.id, request: e.request });
+						receivers.set(e.id, [e]);
+					}
+				}
+			} catch (err) {
+				// A throwing dedupeKey must reject the queued entries, not leave
+				// their promises pending (and their rejection unhandled).
+				for (const e of entries) e.reject(err);
+				return;
+			}
+		} else {
+			for (const e of entries) {
+				batchEntries.push({ id: e.id, request: e.request });
+				receivers.set(e.id, [e]);
+			}
+		}
+
+		const controller = new AbortController();
+		// If an abort was already requested before this channel flushed, start the
+		// query with an already-aborted signal so signal-aware sources can cancel.
+		if (this.aborted) controller.abort();
+		this.controllers.add(controller);
+
+		try {
+			const outcomes = await config.query(batchEntries, {
+				signal: controller.signal,
+			});
+			for (const outcome of outcomes) {
+				const pending = receivers.get(outcome.id);
+				if (!pending) continue;
+				receivers.delete(outcome.id);
+				const isSuccess = "response" in outcome;
+				for (const p of pending) {
+					isSuccess
+						? p.resolve((outcome as BatchSuccess<unknown>).response)
+						: p.reject((outcome as BatchFailure).error);
+				}
+			}
+
+			for (const [id, pending] of receivers) {
+				const error = new Error(`Missing batch outcome for id ${id}`);
+				for (const p of pending) p.reject(error);
+			}
+		} catch (err) {
+			for (const e of entries) e.reject(err);
+		} finally {
+			this.controllers.delete(controller);
+		}
+	}
+}

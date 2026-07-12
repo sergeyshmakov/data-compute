@@ -1,0 +1,49 @@
+name: Bug report
+description: Report a defect or unexpected behavior
+labels: ["bug"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Before submitting, check [existing issues](https://github.com/sergeyshmakov/data-compute/issues) to avoid duplicates.
+
+  - type: textarea
+    id: description
+    attributes:
+      label: Description
+      description: What happened, and what did you expect?
+    validations:
+      required: true
+
+  - type: textarea
+    id: reproduction
+    attributes:
+      label: Minimal reproduction
+      description: A self-contained TypeScript snippet that demonstrates the issue.
+      render: ts
+    validations:
+      required: true
+
+  - type: input
+    id: version
+    attributes:
+      label: Package version
+      placeholder: "0.1.0"
+    validations:
+      required: true
+
+  - type: input
+    id: ts-version
+    attributes:
+      label: TypeScript version
+      placeholder: "5.5.0"
+    validations:
+      required: true
+
+  - type: input
+    id: node-version
+    attributes:
+      label: Node.js version
+      placeholder: "20.11.0"
+    validations:
+      required: true

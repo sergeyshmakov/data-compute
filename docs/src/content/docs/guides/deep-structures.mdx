@@ -1,0 +1,90 @@
+---
+title: Deep structures and arrays
+description: Working with nested objects and arrays using each().
+---
+
+## Nested objects
+
+Formulas can read and write deep paths naturally:
+
+```ts
+interface Order {
+  customer: { name: string; tier: "regular" | "premium" };
+  pricing: { base: number; discount: number };
+  finalPrice: number;
+}
+
+const graph = createGraph<Order>({
+  finalPrice: (f) => {
+    const multiplier = f.customer.tier === "premium" ? 0.9 : 1;
+    return (f.pricing.base - f.pricing.discount) * multiplier;
+  },
+});
+```
+
+The Proxy tracks each path read inside the formula. Renaming any nested field is a compile error.
+
+## Arrays — the `each()` helper
+
+For per-item formulas over an array, use `each()`:
+
+```ts
+import { createGraph, each } from "data-compute";
+
+interface Cart {
+  items: { price: number; quantity: number; tax: number; lineTotal: number }[];
+  globalSurcharge: number;
+  total: number;
+}
+
+const graph = createGraph<Cart>({
+  items: each({
+    // Per-item formula. `item` is the array element, `root` is the full state.
+    tax:       (item, root) => item.price * 0.2 + root.globalSurcharge,
+    lineTotal: (item) => (item.price + item.tax) * item.quantity,
+  }),
+  total: (f) => {
+    return (f.items ?? []).reduce((sum, item) => sum + item.lineTotal, 0);
+  },
+});
+```
+
+`each` does three things:
+
+1. **Preserves typing** — `item` is typed as the array element; `root` is typed as the full state.
+2. **Tracks dependencies natively** — reading `item.price` registers a dependency on each iteration; the framework knows which items were touched.
+3. **Returns a typed mapping** — the per-item formula's outputs are merged back into each element.
+
+## Iteration in non-`each` formulas
+
+You can also iterate arrays directly in a normal formula:
+
+```ts
+total: (f) => (f.items ?? []).reduce((sum, item) => sum + item.price, 0),
+```
+
+The snapshot guarantees each item is read from the same state. See [Snapshot semantics](/data-compute/guides/snapshot-semantics/).
+
+## When to use `each` vs inline iteration
+
+| Use case | Preferred |
+|---|---|
+| Per-item derived field stored on the item itself | `each` |
+| Aggregate (sum, min, max, average) of an array | Inline `reduce` / `map` |
+| Item-level fields that depend on other item-level fields | `each` (handles per-item topology) |
+
+## Deep `each` — nested arrays
+
+`each` composes for deeply nested structures:
+
+```ts
+each({
+  sections: each({
+    rows: each({
+      cellTotal: (cell, root) => cell.qty * cell.price,
+    }),
+  }),
+});
+```
+
+Each level gets its own per-item snapshot and dependency tracking.

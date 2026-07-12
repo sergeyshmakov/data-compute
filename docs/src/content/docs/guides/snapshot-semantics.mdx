@@ -1,0 +1,68 @@
+---
+title: Snapshot semantics
+description: Why every formula sees one consistent view of state.
+---
+
+## The problem snapshots solve
+
+Without consistency guarantees, a formula evaluating against changing state can produce mixed results: half the formula sees the old values, half sees the new ones. The result is a value that was true at no single point in time.
+
+`data-compute` makes this impossible. Every formula in one `compute()` cycle sees the same immutable snapshot of state — taken at cycle start, never mutated, never refetched.
+
+## What a snapshot is
+
+When `compute(patch)` runs:
+
+1. The graph reads current state via `getState()` (if configured).
+2. The patch is merged into a fresh, frozen snapshot.
+3. All formulas in this cycle read from this snapshot — and only this snapshot.
+
+```ts
+const graph = createGraph<Order>({
+  itemCount: (f) => f.items?.length ?? 0,
+  total:     (f) => (f.items ?? []).reduce((s, i) => s + i.price, 0),
+  average:   (f) => f.total / f.itemCount,
+});
+
+await graph.compute({ items: [...] });
+// itemCount, total, average all see the same `items` array.
+// No matter what other code mutates store during the await, this cycle is consistent.
+```
+
+## Cross-array consistency
+
+The snapshot covers nested objects and array iterations. A formula iterating `f.items` sees each element as it was at cycle start, even if the underlying source changes mid-iteration.
+
+```ts
+total: (f) => {
+  let sum = 0;
+  for (const item of f.items ?? []) {
+    sum += item.price;       // item.price is from the snapshot
+    sum += item.tax;         // item.tax from the same snapshot
+  }
+  return sum;
+}
+```
+
+## Snapshots are per-cycle, not global
+
+Each `compute()` call creates a fresh snapshot. Snapshots are not cached across calls — they're a within-cycle consistency mechanism.
+
+```ts
+graph.compute({ quantity: 5 });  // cycle A — snapshot A
+graph.compute({ quantity: 6 });  // cycle B — snapshot B (independent)
+```
+
+Two `compute()` calls in the same microtask are coalesced into one cycle and share one snapshot. See [Granular updates](/data-compute/guides/granular-updates/).
+
+## What snapshots don't do
+
+- **They don't cache results.** Every formula re-runs when called. (Memoization is a separate concern — use the result patch to skip downstream updates.)
+- **They don't freeze your store.** `setState`-style updates are atomic at the end of a cycle; the store is mutable between cycles.
+- **They don't replace transactions.** If two unrelated mutations need to be atomic at the store level, use the store's transaction primitive (e.g. MobX `runInAction`).
+
+## Why this matters for async
+
+Snapshots are why async data sources are safe. If a formula's dependency arrives asynchronously, the graph holds the cycle until all required nodes are ready, then runs every formula against the same snapshot. There's no window where some formulas see the new value and some see the old.
+
+See [Async and batching](/data-compute/guides/async-and-batching/) for the full async lifecycle.

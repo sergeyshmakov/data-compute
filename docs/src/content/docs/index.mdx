@@ -1,0 +1,113 @@
+---
+title: data-compute
+description: Consistent async-derived state for TypeScript — no mixed-state UI, no stale-overwrite races.
+template: splash
+hero:
+  title: Consistent Async-Derived State for TypeScript
+  tagline: No mixed-state UI, no stale-overwrite races. When input, computed values, and async lookups depend on each other, data-compute runs them as one typed graph and returns atomic cycle patches.
+  actions:
+    - text: Quick Start
+      link: /data-compute/getting-started/quick-start/
+      icon: right-arrow
+      variant: primary
+    - text: View on GitHub
+      link: https://github.com/sergeyshmakov/data-compute
+      icon: external
+      variant: minimal
+    - text: View on npm
+      link: https://www.npmjs.com/package/data-compute
+      icon: external
+      variant: minimal
+---
+
+import { Card, CardGrid } from "@astrojs/starlight/components";
+
+## The problem
+
+Derived state that mixes user input, computed values, and async lookups is where consistency bugs live. With hand-rolled coordination a slow response can land after newer input and overwrite it, and the UI flashes a half-updated (mixed) state while pieces settle.
+
+```ts
+// Before — sync useMemo + async useQuery wired by hand. While `pricing` is
+// loading or refetching (e.g. after productId changes), `finalPrice`/`total`
+// recompute from the `?? 0` fallback and flash a wrong, half-updated total —
+// and you hand-maintain every dependency array.
+const subtotal = useMemo(() => quantity * basePrice, [quantity, basePrice]);
+const { data: pricing } = useQuery(["pricing", productId]);
+const finalPrice = useMemo(
+  () => (pricing?.adjustedPrice ?? 0) * quantity,
+  [pricing, quantity],
+);
+const total = useMemo(() => finalPrice + tax, [finalPrice, tax]);
+```
+
+```ts
+// After — one typed DAG. `total` only ever reflects a consistent snapshot, so it
+// never flashes a half-updated value; dependencies are tracked for you.
+const graph = createGraph<Form>({
+  subtotal:   (f) => f.quantity * f.basePrice,
+  finalPrice: (f) => (f.pricing?.adjustedPrice ?? 0) * f.quantity,
+  total:      (f) => f.finalPrice + f.tax,
+});
+
+const result = await graph.compute({ quantity, basePrice, pricing });
+```
+
+## What it is
+
+A framework-agnostic computation engine for state that mixes sync formulas with async lookups. You declare each value as a pure formula; `data-compute` auto-tracks dependencies, orders the graph, waits for async sources, and applies each cycle atomically with stale-response protection.
+
+- **Sync + async in one graph** — downstream formulas wait for async data sources automatically.
+- **Consistency by construction** — every formula in a cycle sees the same snapshot; results apply atomically, so the UI never renders a half-updated state.
+- **Stale-response protection** — when inputs change mid-flight, obsolete responses are discarded or re-issued.
+- **Atomic cycle patches** — partial patch in, partial patch out, same shape as your root.
+- **Framework-agnostic** — plain objects in and out; composes with React, MobX, Zustand, and TanStack Query.
+
+## Feature areas
+
+<CardGrid>
+  <Card title="Async & consistency" icon="rocket">
+    `request` and `batchRequest` data sources, snapshot consistency, stale protection, microtask coalescing.
+
+    [Async and batching](/data-compute/guides/async-and-batching/)
+  </Card>
+  <Card title="Granular updates" icon="puzzle">
+    Pass partial patches, receive partial patches. No full snapshots in or out.
+
+    [Granular updates](/data-compute/guides/granular-updates/)
+  </Card>
+  <Card title="Core graph" icon="document">
+    Pure formulas, auto-tracked dependencies via Proxy, topological execution.
+
+    [Core concepts](/data-compute/guides/core-concepts/)
+  </Card>
+  <Card title="Integrations" icon="setting">
+    Composes with TanStack Query, MobX, Zustand, plain React state.
+
+    [TanStack Query](/data-compute/integrations/tanstack-query/)
+  </Card>
+</CardGrid>
+
+## Next steps
+
+<CardGrid>
+  <Card title="Install" icon="download">
+    Add the package and verify the setup.
+
+    [Installation](/data-compute/getting-started/installation/)
+  </Card>
+  <Card title="Quick start" icon="right-arrow">
+    A working example in under five minutes.
+
+    [Quick Start](/data-compute/getting-started/quick-start/)
+  </Card>
+  <Card title="API cheatsheet" icon="open-book">
+    Every method at a glance.
+
+    [API Cheatsheet](/data-compute/reference/api-cheatsheet/)
+  </Card>
+  <Card title="Types reference" icon="information">
+    `Graph`, `NodeSnapshot`, `TraceStep`, `DeepPartial`, and more.
+
+    [Types](/data-compute/reference/types/)
+  </Card>
+</CardGrid>

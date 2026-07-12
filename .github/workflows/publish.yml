@@ -1,0 +1,87 @@
+name: Publish Package
+on:
+  push:
+    branches:
+      - main
+  workflow_dispatch:
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      issues: write
+      pull-requests: write
+      id-token: write
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+          fetch-tags: true
+      - uses: actions/setup-node@v6
+        with:
+          node-version: 'lts/*'
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Check Formatting & Linting
+        run: npm run lint
+
+      - name: Build
+        run: npm run build
+
+      - name: Run Tests
+        run: npm run test
+
+      - name: Detect Existing Release Tags
+        id: release_tags
+        shell: bash
+        run: |
+          if git tag --list 'v[0-9]*' | grep -q .; then
+            echo "bootstrapped=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "bootstrapped=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Bootstrap First 0.x Tag
+        if: steps.release_tags.outputs.bootstrapped == 'false'
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          VERSION="$(node -p "require('./package.json').version")"
+          PACKAGE_NAME="$(node -p "require('./package.json').name")"
+          TAG="v${VERSION}"
+
+          # The first release is published manually as 0.1.0; the bootstrap only
+          # tags that exact version so semantic-release then continues from it.
+          if [[ "${VERSION}" != "0.1.0" ]]; then
+            echo "Refusing to bootstrap ${PACKAGE_NAME}@${VERSION}: the first release must be 0.1.0. Set package.json version to 0.1.0 and publish it manually before bootstrapping."
+            exit 1
+          fi
+
+          if npm view "${PACKAGE_NAME}@${VERSION}" version >/dev/null 2>&1; then
+            PUBLISHED_REPOSITORY="$(npm view "${PACKAGE_NAME}@${VERSION}" repository.url 2>/dev/null || true)"
+            if [[ "${PUBLISHED_REPOSITORY}" != *"${GITHUB_REPOSITORY}"* ]]; then
+              echo "${PACKAGE_NAME}@${VERSION} already exists on npm but does not point to ${GITHUB_REPOSITORY}; refusing to create ${TAG}."
+              exit 1
+            fi
+
+            echo "${PACKAGE_NAME}@${VERSION} exists on npm; creating ${TAG} so semantic-release continues from 0.x."
+          else
+            echo "${PACKAGE_NAME}@${VERSION} does not exist on npm yet. Publish it manually first, then rerun this workflow to create ${TAG}."
+            exit 1
+          fi
+
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git tag -a "${TAG}" -m "${TAG}"
+          git push origin "${TAG}"
+
+      - name: Semantic Release
+        if: steps.release_tags.outputs.bootstrapped == 'true'
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          NPM_CONFIG_PROVENANCE: true
+        run: npx semantic-release

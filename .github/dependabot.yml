@@ -1,0 +1,59 @@
+version: 2
+
+updates:
+  - package-ecosystem: "npm"
+    directory: "/"
+    schedule:
+      interval: "monthly"
+      time: "06:00"
+      timezone: "UTC"
+    allow:
+      - dependency-type: "direct"
+    open-pull-requests-limit: 5
+    labels:
+      - "dependencies"
+    groups:
+      npm-production:
+        dependency-type: "production"
+      npm-development:
+        dependency-type: "development"
+    ignore:
+      - dependency-name: "@types/node*"
+        versions: [ ">=24" ]
+      - dependency-name: "lint-staged"
+        versions: [ ">=17" ]
+      - dependency-name: "typescript"
+        versions: [ ">=6" ]
+
+  - package-ecosystem: "npm"
+    directory: "/docs"
+    schedule:
+      interval: "monthly"
+      time: "06:00"
+      timezone: "UTC"
+    allow:
+      - dependency-type: "direct"
+    open-pull-requests-limit: 1
+    labels:
+      - "dependencies"
+    groups:
+      docs-dependencies:
+        patterns: ["*"]
+    ignore:
+      - dependency-name: "lint-staged"
+        versions: [ ">=17" ]
+      - dependency-name: "typescript"
+        versions: [ ">=6" ]
+
+  - package-ecosystem: "github-actions"
+    directory: "/"
+    schedule:
+      interval: "monthly"
+      time: "06:00"
+      timezone: "UTC"
+    open-pull-requests-limit: 1
+    labels:
+      - "dependencies"
+    groups:
+      github-actions:
+        patterns: ["*"]

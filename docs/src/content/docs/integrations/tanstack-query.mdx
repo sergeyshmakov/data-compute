@@ -1,0 +1,136 @@
+---
+title: Use with TanStack Query
+description: How data-compute composes with TanStack Query — the network cache layer and the derivation layer.
+---
+
+## They solve different problems
+
+| Layer | TanStack Query | data-compute |
+|---|---|---|
+| Network cache, dedup, refetch, retry | ✅ | ❌ |
+| Optimistic updates, mutations | ✅ | ❌ |
+| Devtools UI for inspecting queries | ✅ | ❌ |
+| Typed derived state with dep tracking | ❌ | ✅ |
+| Sync + async unified in one DAG | ❌ | ✅ |
+| Snapshot consistency across the whole graph | ❌ | ✅ |
+| Granular patch output to any state manager | ❌ | ✅ |
+
+**TanStack Query is the cache layer; `data-compute` is the derivation layer.** Use both when query results feed into derived state with consistency requirements.
+
+## Pattern: query results as graph inputs
+
+The simplest composition. TanStack Query manages the request lifecycle. The result flows into `data-compute` as a source field.
+
+```ts
+import { useEffect, useState } from "react";
+import { useQuery } from "@tanstack/react-query";
+import { createGraph } from "data-compute";
+
+interface Form {
+  productId: string;
+  quantity: number;
+  basePrice: number;
+  pricing: { adjustedPrice: number; taxRate: number } | undefined;
+  subtotal: number;
+  finalPrice: number;
+  tax: number;
+  total: number;
+}
+
+const graph = createGraph<Form>({
+  subtotal:   (f) => f.quantity * f.basePrice,
+  finalPrice: (f) => (f.pricing?.adjustedPrice ?? 0) * f.quantity,
+  tax:        (f) => f.finalPrice * (f.pricing?.taxRate ?? 0),
+  total:      (f) => f.finalPrice + f.tax,
+});
+
+function CheckoutPage({ productId, quantity, basePrice }) {
+  const pricingQuery = useQuery({
+    queryKey: ["pricing", productId],
+    queryFn: () => fetchPricing(productId),
+  });
+
+  const [result, setResult] = useState<Form | null>(null);
+
+  useEffect(() => {
+    if (!pricingQuery.data) return;
+    let active = true;
+    void graph.compute({
+      productId,
+      quantity,
+      basePrice,
+      pricing: pricingQuery.data,
+    })
+      .then((patch) => {
+        if (active) setResult(patch as Form);
+      })
+      .catch(() => {
+        // Keep the last good result if a compute cycle rejects.
+      });
+    return () => {
+      active = false;
+    };
+  }, [productId, quantity, basePrice, pricingQuery.data]);
+
+  return <Receipt total={result?.total} />;
+}
+```
+
+Here TanStack Query handles caching, refetch, and retries for `fetchPricing`. `data-compute` handles the typed derivation downstream.
+
+## Pattern: query inside a data source
+
+When you want the graph to drive the request lifecycle directly — and skip the React hook plumbing — use `request` or `batchRequest` with a `query` function that goes through the TanStack Query client.
+
+```ts
+import { QueryClient } from "@tanstack/react-query";
+import { createGraph, request } from "data-compute";
+
+const queryClient = new QueryClient();
+
+const graph = createGraph<Form>(
+  {
+    tax: (f) => f.subtotal * (f.taxRate ?? 0),
+  },
+  {
+    taxRate: request(
+      (f) => ({ productId: f.productId }),
+      {
+        query: ({ productId }) =>
+          queryClient.fetchQuery({
+            queryKey: ["taxRate", productId],
+            queryFn: () => fetchTaxRate(productId),
+          }),
+      },
+    ),
+  },
+);
+```
+
+`queryClient.fetchQuery` gives you TanStack Query's caching, dedup, and stale-time guarantees inside `data-compute`'s graph. Best of both layers.
+
+## Pattern: invalidating on mutation
+
+When a TanStack mutation invalidates a query, you typically want the graph to recompute too. Subscribe to the query client:
+
+```ts
+queryClient.getQueryCache().subscribe((event) => {
+  if (
+    event.type === "updated" &&
+    event.action?.type === "success" &&
+    event.query.queryKey[0] === "pricing"
+  ) {
+    graph.compute({ pricing: event.query.state.data });
+  }
+});
+```
+
+This keeps the graph in sync without manual wiring at every call site.
+
+## When you don't need both
+
+- **Static / local-only derived state** → just `data-compute`. TanStack Query adds no value if there's no network.
+- **Network requests with no derived state** → just TanStack Query. `data-compute` adds no value if the response is the answer.
+- **Async derived state with no caching needs** → just `data-compute` and `request`/`batchRequest`. Simpler than wiring TanStack Query.
+
+Use both when network results feed into typed derivations with consistency requirements — that's the sweet spot.

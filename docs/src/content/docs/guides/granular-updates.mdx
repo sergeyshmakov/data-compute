@@ -1,0 +1,111 @@
+---
+title: Granular updates
+description: Partial patches in, partial cycle patches out — no full snapshots.
+---
+
+## The principle
+
+`compute()` accepts a partial patch and returns a partial patch. No full-state snapshots cross the API boundary.
+
+```ts
+// User edits quantity. You pass only that.
+graph.compute({ quantity: 2 });
+
+// Result: { quantity: 2, subtotal: 20, tax: 2, total: 22 }
+// The input field plus computed outputs evaluated in this cycle.
+```
+
+The shape of the patch matches the shape of root state. For nested state, apply it with a deep patch merge helper so unrelated sibling fields stay in place.
+
+## Why patches
+
+- **Partial-input safe.** `compute({ quantity: 2 })` does not require the graph to know or return the entire root object.
+- **Framework-agnostic.** React, Zustand, MobX, Redux, and standalone stores can all consume the same patch contract.
+- **Predictable DX.** If a field was passed in or evaluated during the cycle, it is present. Missing fields were not part of this cycle.
+
+## How patches merge with base state
+
+`compute()` needs to know the current values of fields you didn't pass, so it can run formulas correctly. Two ways to provide them:
+
+### 1. Pass them in
+
+```ts
+graph.compute({ ...currentValues, quantity: 2 });
+```
+
+Simple, explicit, but requires spreading every time.
+
+### 2. Configure `getState`
+
+Assume `applyPatch` is your framework or store helper that deep-merges patch paths into the current state.
+
+```ts
+const graph = createGraph<Form>(
+  { /* formulas */ },
+  { /* sources */ },
+  {
+    getState: () => store,
+  },
+);
+
+// The graph reads store at flush time and merges in your patch.
+graph.compute({ quantity: 2 });
+```
+
+`getState` is called **once per cycle, just before evaluation**. This prevents stale closures when inputs change between `compute()` being called and the microtask flushing.
+
+## Applying patches with `setState`
+
+```ts
+const graph = createGraph<Form>(
+  { /* formulas */ },
+  { /* sources */ },
+  {
+    getState: () => store,
+    setState: (patch) => {
+      applyPatch(store, patch);
+    },
+  },
+);
+
+// Fire-and-forget — setState wires the result back into the store.
+graph.compute({ quantity: 2 });
+```
+
+`applyPatch` can be your state manager's built-in nested update helper, Immer, or a small deep merge that merges arrays by index. A shallow top-level assignment is fine only for flat top-level patches.
+
+`setState` fires only for non-stale results. If a cycle's result becomes stale because inputs changed during async work, `setState` is not called for it.
+
+## Awaiting the result instead
+
+If you prefer explicit control:
+
+```ts
+const patch = await graph.compute({ quantity: 2 });
+applyPatch(store, patch);
+```
+
+Both work. Pick the one that matches your store's preferred update style.
+
+## Batching multiple updates
+
+`compute()` calls in the same microtask are coalesced into one cycle.
+
+```ts
+graph.compute({ quantity: 5 });
+graph.compute({ basePrice: 20 });
+graph.compute({ taxRate: 0.1 });
+// → one DAG execution
+// → setState fires once with the combined patch
+```
+
+The merged patch is what reaches `setState` and is what the returned promises resolve to.
+
+## What patches contain
+
+The returned patch contains:
+
+- **Every field you passed in** for the cycle.
+- **Every computed or data-source output that was evaluated** in the cycle.
+
+It does **not** promise changed-only output. If a formula runs and returns the same value as before, that evaluated output can still appear. Changed-only diffs require equality semantics (`Object.is`, deep equality, or custom comparison), which belongs with a later memoization feature rather than the core v1 patch contract.

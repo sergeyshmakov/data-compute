@@ -1,0 +1,114 @@
+{
+	"name": "data-compute",
+	"version": "0.1.0",
+	"description": "Consistent async-derived state for TypeScript. Run sync formulas and async data sources as one typed graph, with snapshot consistency and stale-response protection — no mixed-state UI, no stale-overwrite races.",
+	"license": "MIT",
+	"type": "module",
+	"main": "./dist/index.cjs",
+	"module": "./dist/index.js",
+	"exports": {
+		".": {
+			"import": {
+				"types": "./dist/index.d.ts",
+				"default": "./dist/index.js"
+			},
+			"require": {
+				"types": "./dist/index.d.cts",
+				"default": "./dist/index.cjs"
+			},
+			"default": "./dist/index.js"
+		}
+	},
+	"sideEffects": false,
+	"files": [
+		"dist",
+		"CHANGELOG.md"
+	],
+	"scripts": {
+		"build": "tsup src/index.ts --format cjs,esm --dts --clean --sourcemap",
+		"dev": "npm run build -- --watch",
+		"lint": "biome check src",
+		"lint:fix": "biome check --write src",
+		"prepack": "npm run build",
+		"prepare": "husky",
+		"typecheck": "tsc --noEmit",
+		"test": "vitest run --typecheck",
+		"test:watch": "vitest --typecheck"
+	},
+	"keywords": [
+		"typescript",
+		"derived-state",
+		"reactive",
+		"computation-graph",
+		"dag",
+		"proxy",
+		"lambda",
+		"async",
+		"batching",
+		"state-management",
+		"selector",
+		"type-safe"
+	],
+	"author": {
+		"name": "Sergei Shmakov",
+		"url": "https://github.com/sergeyshmakov"
+	},
+	"repository": {
+		"type": "git",
+		"url": "git+https://github.com/sergeyshmakov/data-compute.git"
+	},
+	"bugs": {
+		"url": "https://github.com/sergeyshmakov/data-compute/issues"
+	},
+	"homepage": "https://sergeyshmakov.github.io/data-compute/",
+	"release": {
+		"branches": [
+			"main"
+		],
+		"plugins": [
+			"@semantic-release/commit-analyzer",
+			"@semantic-release/release-notes-generator",
+			[
+				"@semantic-release/changelog",
+				{
+					"changelogFile": "CHANGELOG.md"
+				}
+			],
+			"@semantic-release/npm",
+			[
+				"@semantic-release/git",
+				{
+					"assets": [
+						"package.json",
+						"package-lock.json",
+						"CHANGELOG.md"
+					],
+					"message": "chore(release): ${nextRelease.version} [skip ci]\n\n${nextRelease.notes}"
+				}
+			],
+			"@semantic-release/github"
+		]
+	},
+	"devDependencies": {
+		"@biomejs/biome": "2.4.6",
+		"@commitlint/cli": "^20.4.3",
+		"@commitlint/config-conventional": "^20.4.3",
+		"@semantic-release/changelog": "^6.0.3",
+		"@semantic-release/git": "^10.0.1",
+		"husky": "^9.1.7",
+		"lint-staged": "^16.4.0",
+		"semantic-release": "^25.0.3",
+		"tsup": "^8.5.1",
+		"typescript": "^5.9.3",
+		"vitest": "^4.0.18"
+	},
+	"peerDependencies": {
+		"typescript": ">=5.0.0"
+	},
+	"engines": {
+		"node": ">=20"
+	},
+	"volta": {
+		"node": "24.14.0"
+	}
+}
