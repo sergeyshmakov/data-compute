@@ -24,6 +24,7 @@ export class BatchCoordinator {
 	private flushScheduled = false;
 	private nextId = 0;
 	private controllers = new Set<AbortController>();
+	private aborted = false;
 
 	submit<Req, Res>(
 		config: BatchDataSourceConfig<Req, Res>,
@@ -55,6 +56,10 @@ export class BatchCoordinator {
 	}
 
 	abort(): void {
+		// Remember the abort: a channel whose AbortController has not been created
+		// yet (submit queued flush, but flushChannel has not run) would otherwise
+		// receive a fresh, non-aborted signal and keep running.
+		this.aborted = true;
 		for (const controller of this.controllers) {
 			controller.abort();
 		}
@@ -117,6 +122,9 @@ export class BatchCoordinator {
 		}
 
 		const controller = new AbortController();
+		// If an abort was already requested before this channel flushed, start the
+		// query with an already-aborted signal so signal-aware sources can cancel.
+		if (this.aborted) controller.abort();
 		this.controllers.add(controller);
 
 		try {

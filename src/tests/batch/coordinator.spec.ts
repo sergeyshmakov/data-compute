@@ -171,6 +171,30 @@ describe("BatchCoordinator", () => {
 			expect(capturedSignal?.aborted).toBe(false);
 		});
 
+		it("remembers an abort issued before the channel flushes", async () => {
+			let capturedSignal: AbortSignal | undefined;
+			const config: BatchDataSourceConfig<unknown, unknown> = {
+				query: vi
+					.fn()
+					.mockImplementation(
+						async (
+							entries: { id: string }[],
+							meta: { signal: AbortSignal },
+						) => {
+							capturedSignal = meta.signal;
+							return entries.map((e) => ({ id: e.id, response: "ok" }));
+						},
+					),
+			};
+			const coordinator = new BatchCoordinator();
+			const p = coordinator.submit(config, {});
+			// Abort synchronously, before the queued flush microtask runs and the
+			// channel's AbortController is created.
+			coordinator.abort();
+			await p.catch(() => {});
+			expect(capturedSignal?.aborted).toBe(true);
+		});
+
 		it("does not abort completed failed queries", async () => {
 			let capturedSignal: AbortSignal | undefined;
 			const config: BatchDataSourceConfig<unknown, unknown> = {
