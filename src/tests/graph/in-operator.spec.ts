@@ -28,4 +28,21 @@ describe("`in` operator dependency tracking", () => {
 		const result = await graph.compute({});
 		expect(result.exists).toBe(true);
 	});
+
+	it("records a computed key probed with Object.hasOwn (getOwnPropertyDescriptor)", () => {
+		const graph = createGraph<Root>({
+			exists: (f) => Object.hasOwn(f, "total"),
+			total: () => 5,
+		});
+		expect(graph.deps((x) => x.exists)).toContain("total");
+	});
+
+	it("computes an Object.hasOwn check after the probed node runs", async () => {
+		const graph = createGraph<Root>({
+			exists: (f) => Object.hasOwn(f, "total"),
+			total: () => 5,
+		});
+		const result = await graph.compute({});
+		expect(result.exists).toBe(true);
+	});
 });

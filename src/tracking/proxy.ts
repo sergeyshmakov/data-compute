@@ -95,6 +95,14 @@ export function dryRunProxy(deps: Set<string>, path = ""): unknown {
 			}
 			return true;
 		},
+		getOwnPropertyDescriptor(target, prop) {
+			// Own-key existence checks (Object.hasOwn / getOwnPropertyDescriptor)
+			// go through [[GetOwnProperty]]; record the probed key too.
+			if (typeof prop === "string") {
+				deps.add(path ? `${path}.${prop}` : prop);
+			}
+			return Reflect.getOwnPropertyDescriptor(target, prop);
+		},
 		ownKeys(target) {
 			// Enumeration (spread / Object.keys / for-in) means the formula depends
 			// on the whole container, including computed children not yet present.

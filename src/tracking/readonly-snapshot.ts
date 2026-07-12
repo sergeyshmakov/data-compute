@@ -170,6 +170,13 @@ export function readonlyTrackedSnapshot<T>(
 			if (typeof prop === "string") deps.add(pathJoin(path, prop));
 			return Reflect.has(target, prop);
 		},
+		getOwnPropertyDescriptor(target, prop) {
+			// Own-key existence checks — Object.hasOwn, getOwnPropertyDescriptor,
+			// hasOwnProperty — go through [[GetOwnProperty]], not `has`/`get`.
+			// Record the probed key so they track the same dependency.
+			if (typeof prop === "string") deps.add(pathJoin(path, prop));
+			return Reflect.getOwnPropertyDescriptor(target, prop);
+		},
 		ownKeys(target) {
 			// Enumeration (spread / Object.keys / for-in) means the formula depends
 			// on the whole container, including computed children not yet present.
