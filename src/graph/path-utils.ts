@@ -61,7 +61,7 @@ export function setByPath(
 	curr[parts[parts.length - 1]] = value;
 }
 
-/** Deletes the leaf at `path` if present. Missing intermediate paths are a no-op. */
+/** Clears the leaf at `path` if present. Missing intermediate paths are a no-op. */
 export function deleteByPath(obj: Record<string, unknown>, path: string): void {
 	assertSafePath(path);
 	const parts = path.split(".");
@@ -70,8 +70,15 @@ export function deleteByPath(obj: Record<string, unknown>, path: string): void {
 		if (curr === null || typeof curr !== "object") return;
 		curr = (curr as Record<string, unknown>)[parts[i]];
 	}
-	if (curr !== null && typeof curr === "object") {
-		delete (curr as Record<string, unknown>)[parts[parts.length - 1]];
+	if (curr === null || typeof curr !== "object") return;
+	const leaf = parts[parts.length - 1];
+	// For an array index, clear the slot to `undefined` rather than `delete`,
+	// which would leave a sparse hole and desync `length`/wildcard scans. For
+	// object keys, remove the property.
+	if (Array.isArray(curr) && /^\d+$/.test(leaf)) {
+		if (Number(leaf) < curr.length) curr[Number(leaf)] = undefined;
+	} else {
+		delete (curr as Record<string, unknown>)[leaf];
 	}
 }
 
