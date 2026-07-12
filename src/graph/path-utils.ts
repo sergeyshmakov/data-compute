@@ -61,6 +61,20 @@ export function setByPath(
 	curr[parts[parts.length - 1]] = value;
 }
 
+/** Deletes the leaf at `path` if present. Missing intermediate paths are a no-op. */
+export function deleteByPath(obj: Record<string, unknown>, path: string): void {
+	assertSafePath(path);
+	const parts = path.split(".");
+	let curr: unknown = obj;
+	for (let i = 0; i < parts.length - 1; i++) {
+		if (curr === null || typeof curr !== "object") return;
+		curr = (curr as Record<string, unknown>)[parts[i]];
+	}
+	if (curr !== null && typeof curr === "object") {
+		delete (curr as Record<string, unknown>)[parts[parts.length - 1]];
+	}
+}
+
 export function expandRuntimePaths(
 	templatePath: string,
 	state: Record<string, unknown>,

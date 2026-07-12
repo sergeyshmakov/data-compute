@@ -29,7 +29,12 @@ import {
 	containerDescendants,
 } from "./deps-maps.js";
 import { type FlatNode, flattenGraph } from "./flatten.js";
-import { expandRuntimePaths, getByPath, setByPath } from "./path-utils.js";
+import {
+	deleteByPath,
+	expandRuntimePaths,
+	getByPath,
+	setByPath,
+} from "./path-utils.js";
 import {
 	cloneForCompute,
 	deepFreezeSnapshot,
@@ -193,6 +198,22 @@ class ComputeGraph<Root> implements Graph<Root> {
 		return this.computePromise;
 	}
 
+	/**
+	 * Removes computed-node values from the output patch seed. Computed fields
+	 * are produced by the graph; a value a caller happened to pass for one must
+	 * not survive in the returned patch (or setState) when its node errors, is
+	 * skipped, or is discarded as stale. Only the output patch is stripped — the
+	 * working state keeps the input, since a node may read its own input (e.g. a
+	 * scalar `each` maps `item` to a new value at the same path).
+	 */
+	private stripComputedFromOutput(patch: Record<string, unknown>): void {
+		for (const key of this.computedKeys) {
+			for (const { runtimePath } of expandRuntimePaths(key, patch)) {
+				deleteByPath(patch, runtimePath);
+			}
+		}
+	}
+
 	private async flushCompute(runId: number): Promise<DeepPartial<Root>> {
 		const currentVersion = this.version;
 		const graphStalePolicy = this.options.stalePolicy ?? "discard";
@@ -276,6 +297,10 @@ class ComputeGraph<Root> implements Graph<Root> {
 				cloneForCompute(baseState),
 				granularPatch,
 			);
+
+			// The working state keeps the full input; the output patch drops any
+			// caller-supplied computed values so only produced ones are returned.
+			this.stripComputedFromOutput(granularPatch);
 
 			const batchCoordinator = new BatchCoordinator();
 			this.liveCoordinators.add(batchCoordinator);
