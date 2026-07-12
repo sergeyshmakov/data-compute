@@ -16,11 +16,13 @@ When user input, computed values, and async lookups depend on each other, `data-
 
 ## The problem
 
-Derived state that mixes user input, computed values, and async lookups is where consistency bugs live — a slow response lands after newer input and overwrites it, and the UI flashes a half-updated (mixed) state.
+Derived state that mixes user input, computed values, and async lookups is where consistency bugs live. With hand-rolled coordination a slow response can land after newer input and overwrite it, and the UI flashes a half-updated (mixed) state while pieces settle.
 
 ```ts
-// Before — useMemo/useEffect scatter. `pricing` for an OLD productId can resolve
-// after the user changed it, overwriting fresh input; the UI shows a mixed state.
+// Before — sync useMemo + async useQuery wired by hand. While `pricing` is
+// loading or refetching (e.g. after productId changes), `finalPrice`/`total`
+// recompute from the `?? 0` fallback and flash a wrong, half-updated total —
+// and you hand-maintain every dependency array.
 const subtotal = useMemo(() => quantity * basePrice, [quantity, basePrice]);
 const { data: pricing } = useQuery(["pricing", productId]);
 const finalPrice = useMemo(
@@ -31,8 +33,8 @@ const total = useMemo(() => finalPrice + tax, [finalPrice, tax]);
 ```
 
 ```ts
-// After — one typed DAG. Downstream formulas wait for async, every cycle applies
-// atomically, and responses for superseded input are discarded. No mixed state.
+// After — one typed DAG. `total` only ever reflects a consistent snapshot, so it
+// never flashes a half-updated value; dependencies are tracked for you.
 const graph = createGraph<Form>({
   subtotal:   (f) => f.quantity * f.basePrice,
   finalPrice: (f) => (f.pricing?.adjustedPrice ?? 0) * f.quantity,
