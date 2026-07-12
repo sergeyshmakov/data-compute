@@ -176,7 +176,8 @@ export type NodeSnapshot<Value> =
 	  };
 
 /** Error emitted when a node evaluation fails after runtime handling. */
-export interface GraphError<_Key extends PropertyKey = PropertyKey> {
+export interface GraphError {
+	/** Runtime node path that failed (may contain `*` for each templates). */
 	readonly key: string;
 	readonly cause: unknown;
 }
@@ -232,7 +233,7 @@ export interface GraphOptions<Root> {
 	/**
 	 * Interceptors for transforming or validating node values.
 	 */
-	readonly interceptors?: readonly Interceptor<unknown>[];
+	readonly interceptors?: readonly Interceptor<Root>[];
 	/**
 	 * Called before a compute() evaluates to get the latest full state.
 	 */
@@ -250,7 +251,12 @@ export interface GraphOptions<Root> {
 
 export interface Graph<Root> {
 	/**
-	 * Computes a fully consistent Root snapshot.
+	 * Runs one compute cycle for the given input patch.
+	 *
+	 * Returns a granular patch (`DeepPartial<Root>`) containing the input fields
+	 * for this cycle plus the computed outputs that actually ran. Nodes that are
+	 * still pending, or discarded under the active `stalePolicy`, are omitted —
+	 * the result is not a full `Root` snapshot.
 	 */
 	compute(input: ComputeInput<Root>): Promise<DeepPartial<Root>>;
 
@@ -270,6 +276,12 @@ export interface Graph<Root> {
 	snapshot<T = unknown>(path: string): NodeSnapshot<T>;
 
 	/**
+	 * Reads the latest stable snapshot for a computed node (accessor-based).
+	 * Returns the full discriminated union, including the `error` branch.
+	 */
+	computeSnapshot<T>(accessor: NodeAccessor<Root, T>): NodeSnapshot<T>;
+
+	/**
 	 * Reads value and status together (accessor-based).
 	 */
 	computeResult<T>(accessor: NodeAccessor<Root, T>): {
@@ -286,9 +298,13 @@ export interface Graph<Root> {
 	readonly sources: readonly string[];
 
 	/** Topological execution order of computed nodes. */
-	readonly order?: readonly string[];
-	/** Whether the graph contains a cycle. */
-	readonly hasCycle?: boolean;
+	readonly order: readonly string[];
+	/**
+	 * Whether the graph contains a cycle. Always `false` for a successfully
+	 * constructed graph — `createGraph` throws on cyclic dependencies — but
+	 * exposed for introspection and forward compatibility.
+	 */
+	readonly hasCycle: boolean;
 
 	/**
 	 * Returns direct dependencies of the node selected by the accessor.

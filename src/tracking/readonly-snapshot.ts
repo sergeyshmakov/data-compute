@@ -8,6 +8,32 @@ const ARRAY_SHORT_CIRCUIT_METHODS = new Set<PropertyKey>([
 ]);
 const MAP_MUTATORS = new Set<PropertyKey>(["set", "delete", "clear"]);
 const SET_MUTATORS = new Set<PropertyKey>(["add", "delete", "clear"]);
+const DATE_MUTATORS = new Set<PropertyKey>([
+	"setTime",
+	"setMilliseconds",
+	"setSeconds",
+	"setMinutes",
+	"setHours",
+	"setDate",
+	"setMonth",
+	"setFullYear",
+	"setUTCMilliseconds",
+	"setUTCSeconds",
+	"setUTCMinutes",
+	"setUTCHours",
+	"setUTCDate",
+	"setUTCMonth",
+	"setUTCFullYear",
+	"setYear",
+]);
+
+/**
+ * Proxy cache keyed by target object and then by the path at which it is
+ * reached. Keying by path (not object identity alone) keeps dependency
+ * tracking correct when the same object is aliased under multiple paths, while
+ * still returning a stable proxy for repeat access at the same path.
+ */
+type SnapshotCache = WeakMap<object, Map<string, unknown>>;
 
 function pathJoin(base: string, segment: PropertyKey): string {
 	return base ? `${base}.${String(segment)}` : String(segment);
@@ -38,7 +64,7 @@ export function readonlyTrackedSnapshot<T>(
 	value: T,
 	deps: Set<string>,
 	path = "",
-	cache = new WeakMap<object, unknown>(),
+	cache: SnapshotCache = new WeakMap(),
 ): T {
 	if (
 		value === null ||
@@ -48,7 +74,12 @@ export function readonlyTrackedSnapshot<T>(
 	}
 
 	const objectValue = value as object;
-	const existing = cache.get(objectValue);
+	let byPath = cache.get(objectValue);
+	if (!byPath) {
+		byPath = new Map();
+		cache.set(objectValue, byPath);
+	}
+	const existing = byPath.get(path);
 	if (existing) return existing as T;
 
 	let proxy: unknown;
@@ -93,6 +124,7 @@ export function readonlyTrackedSnapshot<T>(
 			}
 
 			if (target instanceof Date && typeof nestedValue === "function") {
+				if (DATE_MUTATORS.has(prop)) return throwReadonlySnapshotMutation;
 				return nestedValue.bind(target);
 			}
 
@@ -125,24 +157,29 @@ export function readonlyTrackedSnapshot<T>(
 		},
 	});
 
-	cache.set(objectValue, proxy);
+	byPath.set(path, proxy);
 	return proxy as T;
 }
 
 function trackedMapMember(
 	map: Map<unknown, unknown>,
 	prop: PropertyKey,
-	key: string,
+	_key: string,
 	deps: Set<string>,
 	path: string,
-	cache: WeakMap<object, unknown>,
+	cache: SnapshotCache,
 	proxy: unknown,
 ): unknown {
 	if (MAP_MUTATORS.has(prop)) return throwReadonlySnapshotMutation;
 
 	if (prop === "get") {
-		return (mapKey: unknown) =>
-			readonlyTrackedSnapshot(map.get(mapKey), deps, key, cache);
+		return (mapKey: unknown) => {
+			// Record the specific entry read so an entry-level change invalidates
+			// dependents, rather than collapsing every get() to the map path.
+			const entryPath = pathJoin(path, String(mapKey));
+			deps.add(entryPath);
+			return readonlyTrackedSnapshot(map.get(mapKey), deps, entryPath, cache);
+		};
 	}
 
 	if (prop === "entries")
@@ -187,7 +224,7 @@ function trackedSetMember(
 	_key: string,
 	deps: Set<string>,
 	path: string,
-	cache: WeakMap<object, unknown>,
+	cache: SnapshotCache,
 	proxy: unknown,
 ): unknown {
 	if (SET_MUTATORS.has(prop)) return throwReadonlySnapshotMutation;
@@ -225,7 +262,7 @@ function* trackedMapEntries(
 	map: Map<unknown, unknown>,
 	deps: Set<string>,
 	path: string,
-	cache: WeakMap<object, unknown>,
+	cache: SnapshotCache,
 ): IterableIterator<[unknown, unknown]> {
 	let index = 0;
 	for (const [key, value] of map) {
@@ -242,7 +279,7 @@ function* trackedMapKeys(
 	map: Map<unknown, unknown>,
 	deps: Set<string>,
 	path: string,
-	cache: WeakMap<object, unknown>,
+	cache: SnapshotCache,
 ): IterableIterator<unknown> {
 	let index = 0;
 	for (const key of map.keys()) {
@@ -260,7 +297,7 @@ function* trackedMapValues(
 	map: Map<unknown, unknown>,
 	deps: Set<string>,
 	path: string,
-	cache: WeakMap<object, unknown>,
+	cache: SnapshotCache,
 ): IterableIterator<unknown> {
 	let index = 0;
 	for (const value of map.values()) {
@@ -278,7 +315,7 @@ function* trackedSetEntries(
 	set: Set<unknown>,
 	deps: Set<string>,
 	path: string,
-	cache: WeakMap<object, unknown>,
+	cache: SnapshotCache,
 ): IterableIterator<[unknown, unknown]> {
 	let index = 0;
 	for (const value of set) {
@@ -293,7 +330,7 @@ function* trackedSetValues(
 	set: Set<unknown>,
 	deps: Set<string>,
 	path: string,
-	cache: WeakMap<object, unknown>,
+	cache: SnapshotCache,
 ): IterableIterator<unknown> {
 	let index = 0;
 	for (const value of set) {

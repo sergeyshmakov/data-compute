@@ -310,6 +310,26 @@ describe("GraphOptions", () => {
 			},
 		});
 	});
+
+	it("interceptor state is typed as Readonly<Root>", () => {
+		createGraph<DeepRoot>({ total: (_f) => 42 }, undefined, {
+			interceptors: [
+				(_path, value, state, next) => {
+					expectTypeOf(state).toMatchTypeOf<Readonly<DeepRoot>>();
+					expectTypeOf(state.total).toEqualTypeOf<number>();
+					return next(value);
+				},
+			],
+		});
+	});
+});
+
+describe("Graph introspection types", () => {
+	it("order and hasCycle are always present (non-optional)", () => {
+		const graph = createGraph<DeepRoot>({ total: (_f) => 42 });
+		expectTypeOf(graph.order).toEqualTypeOf<readonly string[]>();
+		expectTypeOf(graph.hasCycle).toEqualTypeOf<boolean>();
+	});
 });
 
 describe("Graph snapshot", () => {
@@ -318,5 +338,15 @@ describe("Graph snapshot", () => {
 	it("snapshot<T> returns NodeSnapshot<T>", () => {
 		const snap = graph.snapshot<number>("total");
 		expectTypeOf(snap).toMatchTypeOf<NodeSnapshot<number>>();
+	});
+
+	it("computeSnapshot returns NodeSnapshot<T> for a valid accessor", () => {
+		const snap = graph.computeSnapshot((x) => x.total);
+		expectTypeOf(snap).toMatchTypeOf<NodeSnapshot<number>>();
+	});
+
+	it("computeSnapshot rejects invalid accessor", () => {
+		// @ts-expect-error - 'typo' does not exist on DeepRoot
+		graph.computeSnapshot((x) => x.typo);
 	});
 });

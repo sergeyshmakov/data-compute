@@ -1,5 +1,9 @@
 import { BatchCoordinator } from "../batch/coordinator.js";
-import { pathDependencies, topoSort } from "../dag/index.js";
+import {
+	buildWildcardPrefixes,
+	pathDependencies,
+	topoSort,
+} from "../dag/index.js";
 import { resolveAccessor } from "../tracking/accessor.js";
 import { readonlyTrackedSnapshot } from "../tracking/readonly-snapshot.js";
 import type {
@@ -9,6 +13,7 @@ import type {
 	DeepFormulaMap,
 	DeepPartial,
 	Graph,
+	GraphError,
 	GraphOptions,
 	NodeAccessor,
 	NodeSnapshot,
@@ -74,6 +79,7 @@ class ComputeGraph<Root> implements Graph<Root> {
 	private reverseMap: Map<string, Set<string>>;
 	private readonly flatNodes: FlatNode[];
 	private readonly flatNodeByPath: ReadonlyMap<string, FlatNode>;
+	private readonly wildcardPrefixes: ReadonlySet<string>;
 
 	// Runtime node state
 	private readonly nodeStatus = new Map<string, NodeStatus>();
@@ -113,6 +119,7 @@ class ComputeGraph<Root> implements Graph<Root> {
 		this.reverseMap = buildReverseDepsMap(this.depsMap);
 
 		const allPaths = this.flatNodes.map((n) => n.path);
+		this.wildcardPrefixes = buildWildcardPrefixes(allPaths);
 		const { order, hasCycle } = topoSort(allPaths, this.depsMap);
 		this._hasCycle = hasCycle;
 
@@ -191,8 +198,33 @@ class ComputeGraph<Root> implements Graph<Root> {
 			);
 		}
 
+		// Each retry discovers at least one new computed-dependency edge, and the
+		// number of such edges is bounded by n*(n-1), so allow that many retries
+		// before declaring the graph unable to converge.
+		const nodeCount = this.computedKeys.length;
+		const maxRuntimeDependencyRetries = Math.max(
+			1,
+			nodeCount * (nodeCount - 1),
+		);
+		return this.runAttempts(
+			runId,
+			currentVersion,
+			graphStalePolicy,
+			inputPatch,
+			baseState,
+			maxRuntimeDependencyRetries,
+		);
+	}
+
+	private async runAttempts(
+		runId: number,
+		currentVersion: number,
+		graphStalePolicy: StalePolicy,
+		inputPatch: Record<string, unknown>,
+		baseState: unknown,
+		maxRuntimeDependencyRetries: number,
+	): Promise<DeepPartial<Root>> {
 		let runtimeDependencyRetries = 0;
-		const maxRuntimeDependencyRetries = Math.max(1, this.computedKeys.length);
 		while (true) {
 			let shouldRetryForRuntimeDeps = false;
 			let stoppedForStale = false;
@@ -395,6 +427,21 @@ class ComputeGraph<Root> implements Graph<Root> {
 			}
 
 			if (shouldRetryForRuntimeDeps) {
+				// A newer compute() may have superseded this run while it awaited an
+				// async node. Re-entering the attempt loop would run setNodePending
+				// over every node and clobber the fresh run's already-published
+				// statuses, so honor the stale policy before retrying.
+				if (this.isStale(currentVersion)) {
+					const staleAction = this.handleStale(
+						currentVersion,
+						runId,
+						graphStalePolicy,
+						attemptOrder[0] ?? "",
+						batchCoordinator,
+					);
+					if (staleAction.status === "retry") return staleAction.promise;
+					return granularPatch as DeepPartial<Root>;
+				}
 				runtimeDependencyRetries++;
 				if (runtimeDependencyRetries > maxRuntimeDependencyRetries) {
 					throw new Error("Runtime dependency retry limit exceeded.");
@@ -410,26 +457,41 @@ class ComputeGraph<Root> implements Graph<Root> {
 		}
 	}
 
+	/**
+	 * Resolves a path to the node key that actually stores state for it. Falls
+	 * back to the `<path>.*` each-template so a scalar `each()` array is
+	 * reachable via its natural accessor (e.g. `(x) => x.list`).
+	 */
+	private resolveNodeKey(path: string): string {
+		if (this.flatNodeByPath.has(path)) return path;
+		const wildcard = path ? `${path}.*` : "*";
+		if (this.flatNodeByPath.has(wildcard)) return wildcard;
+		return path;
+	}
+
 	status(path: string): NodeStatus {
-		return this.nodeStatus.get(path) ?? "pending";
+		return this.nodeStatus.get(this.resolveNodeKey(path)) ?? "pending";
 	}
 
 	computeStatus<T>(accessor: NodeAccessor<Root, T>): NodeStatus {
-		return this.status(resolveAccessor(accessor) as string);
+		return this.status(this.resolveAccessorKey(accessor));
 	}
 
 	snapshot<T = unknown>(path: string): NodeSnapshot<T> {
-		return (this.nodeSnap.get(path) ?? {
+		return (this.nodeSnap.get(this.resolveNodeKey(path)) ?? {
 			status: "pending",
 		}) as NodeSnapshot<T>;
+	}
+
+	computeSnapshot<T>(accessor: NodeAccessor<Root, T>): NodeSnapshot<T> {
+		return this.snapshot<T>(this.resolveAccessorKey(accessor));
 	}
 
 	computeResult<T>(accessor: NodeAccessor<Root, T>): {
 		readonly value: T | undefined;
 		readonly status: NodeStatus;
 	} {
-		const path = resolveAccessor(accessor) as string;
-		const snap = this.snapshot<T>(path);
+		const snap = this.snapshot<T>(this.resolveAccessorKey(accessor));
 		return {
 			value: "value" in snap ? snap.value : undefined,
 			status: snap.status,
@@ -437,15 +499,19 @@ class ComputeGraph<Root> implements Graph<Root> {
 	}
 
 	deps<T>(accessor: NodeAccessor<Root, T>): readonly string[] {
-		const key = resolveAccessor(accessor);
-		const d = this.depsMap.get(key as string);
+		const key = this.resolveNodeKey(this.resolveAccessorKey(accessor));
+		const d = this.depsMap.get(key);
 		return d ? [...d] : [];
 	}
 
 	dependents<T>(accessor: NodeAccessor<Root, T>): readonly string[] {
-		const key = resolveAccessor(accessor);
-		const d = this.reverseMap.get(key as string);
+		const key = this.resolveNodeKey(this.resolveAccessorKey(accessor));
+		const d = this.reverseMap.get(key);
 		return d ? [...d] : [];
+	}
+
+	private resolveAccessorKey<T>(accessor: NodeAccessor<Root, T>): string {
+		return resolveAccessor(accessor, this.wildcardPrefixes) as string;
 	}
 
 	toMermaid(): string {
@@ -497,7 +563,7 @@ class ComputeGraph<Root> implements Graph<Root> {
 					ms,
 				});
 			} else {
-				setByPath(state, path, result);
+				setByPath(state, path, result, this.wildcardPrefixes);
 				steps.push({ node: path, deps: depValues, result, ms });
 			}
 		}
@@ -515,7 +581,7 @@ class ComputeGraph<Root> implements Graph<Root> {
 	): Promise<ExecutionResult> {
 		const accessed = new Set<string>();
 		const rootSnapshot = cloneForCompute(state);
-		const snapshotCache = new WeakMap<object, unknown>();
+		const snapshotCache = new WeakMap<object, Map<string, unknown>>();
 		const rootState = readonlyTrackedSnapshot(
 			rootSnapshot,
 			accessed,
@@ -571,7 +637,11 @@ class ComputeGraph<Root> implements Graph<Root> {
 		attemptIndex: ReadonlyMap<string, number>,
 		orderIndex: number,
 	): boolean {
-		const runtimeDeps = pathDependencies(accessed, node.path);
+		const runtimeDeps = pathDependencies(
+			accessed,
+			node.path,
+			this.wildcardPrefixes,
+		);
 		const currentDeps = this.depsMap.get(node.path) ?? new Set<string>();
 		const addedDeps: string[] = [];
 		const addedComputedDeps: string[] = [];
@@ -656,8 +726,13 @@ class ComputeGraph<Root> implements Graph<Root> {
 		);
 		if (staleAction.status !== "fresh") return staleAction;
 
-		setByPath(state, nodePath, interceptedResult);
-		setByPath(granularPatch, nodePath, interceptedResult);
+		setByPath(state, nodePath, interceptedResult, this.wildcardPrefixes);
+		setByPath(
+			granularPatch,
+			nodePath,
+			interceptedResult,
+			this.wildcardPrefixes,
+		);
 		this.setNodeReady(nodePath, interceptedResult);
 		return { status: "applied" };
 	}
@@ -670,7 +745,9 @@ class ComputeGraph<Root> implements Graph<Root> {
 		const interceptors = this.options.interceptors;
 		if (!interceptors?.length) return value;
 
-		const snapshot = deepFreezeSnapshot(cloneForCompute(state));
+		const snapshot = deepFreezeSnapshot(
+			cloneForCompute(state),
+		) as Readonly<Root>;
 		const dispatch = (index: number, nextValue: unknown): unknown => {
 			const interceptor = interceptors[index];
 			if (!interceptor) return nextValue;
@@ -699,6 +776,7 @@ class ComputeGraph<Root> implements Graph<Root> {
 	): Promise<"applied" | "stale"> {
 		const successes: unknown[] = [];
 		const readyOutcomes: { runtimePath: string; result: unknown }[] = [];
+		const errors: GraphError[] = [];
 		let firstError: unknown;
 
 		for (const outcome of outcomes) {
@@ -718,25 +796,35 @@ class ComputeGraph<Root> implements Graph<Root> {
 				} catch (cause) {
 					if (this.isStale(version)) return "stale";
 					if (firstError === undefined) firstError = cause;
-					this.options.onError?.({
-						key: outcome.runtimePath,
-						cause,
-					});
+					errors.push({ key: outcome.runtimePath, cause });
 				}
 			} else {
 				if (firstError === undefined) firstError = outcome.cause;
-				this.options.onError?.({
-					key: outcome.runtimePath,
-					cause: outcome.cause,
-				});
+				errors.push({ key: outcome.runtimePath, cause: outcome.cause });
 			}
 		}
 
+		// Only surface results and errors once the run is confirmed fresh, so a
+		// superseded run never fires onError or commits partial results.
 		if (this.isStale(version)) return "stale";
 
+		for (const error of errors) {
+			this.options.onError?.(error);
+		}
+
 		for (const outcome of readyOutcomes) {
-			setByPath(state, outcome.runtimePath, outcome.result);
-			setByPath(granularPatch, outcome.runtimePath, outcome.result);
+			setByPath(
+				state,
+				outcome.runtimePath,
+				outcome.result,
+				this.wildcardPrefixes,
+			);
+			setByPath(
+				granularPatch,
+				outcome.runtimePath,
+				outcome.result,
+				this.wildcardPrefixes,
+			);
 		}
 
 		if (firstError !== undefined) {
