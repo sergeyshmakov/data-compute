@@ -59,6 +59,28 @@ export function buildDepsMap(nodes: FlatNode[]): Map<string, Set<string>> {
 			pathDependencies(accessed, node.path, wildcardPrefixes),
 		);
 	}
+
+	// Expand container reads to their computed descendants. A formula that reads
+	// a whole container (e.g. `{ ...f.nested }`) records only the parent path
+	// "nested", which matches no exact node, so it would run before a computed
+	// child like "nested.value" and publish stale data. For each such dependency
+	// add the computed descendant nodes. Skip a node's own ancestor paths —
+	// expanding those would link independent siblings and create false cycles.
+	const nodePaths = nodes.map((n) => n.path);
+	for (const [node, deps] of depsMap) {
+		const expanded = new Set(deps);
+		for (const dep of deps) {
+			if (node === dep || node.startsWith(`${dep}.`)) continue;
+			const prefix = `${dep}.`;
+			for (const candidate of nodePaths) {
+				if (candidate !== node && candidate.startsWith(prefix)) {
+					expanded.add(candidate);
+				}
+			}
+		}
+		depsMap.set(node, expanded);
+	}
+
 	return depsMap;
 }
 
