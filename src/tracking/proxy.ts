@@ -75,14 +75,24 @@ export function dryRunProxy(deps: Set<string>, path = ""): unknown {
 				// `array[index].prop` resolve to `<parent>.0.prop`. For iterators the
 				// argument after the callback is the user thisArg; forward it.
 				try {
-					if (isReducer) {
-						callback.call(undefined, element, element, 0, array);
-					} else {
-						callback.call(args[callbackIndex + 1], element, 0, array);
+					const returned = isReducer
+						? callback.call(undefined, element, element, 0, array)
+						: callback.call(args[callbackIndex + 1], element, 0, array);
+					// An async callback (`async item => { await …; throw … }`) returns a
+					// real promise this phantom method never awaits. Swallow its
+					// rejection so it doesn't surface as an unhandled rejection during
+					// dry-run extraction. Guard against a returned proxy — reading `.then`
+					// on it would spuriously record a `.then` dependency.
+					if (
+						returned != null &&
+						!isProxy(returned) &&
+						typeof (returned as { then?: unknown }).then === "function"
+					) {
+						(returned as Promise<unknown>).catch(() => {});
 					}
 				} catch {
-					// Callback threw against the phantom proxy; reads before the throw
-					// are already recorded.
+					// Callback threw synchronously against the phantom proxy; reads
+					// before the throw are already recorded.
 				}
 			}
 			return dryRunProxy(deps, path);
