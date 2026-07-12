@@ -60,7 +60,7 @@ A framework-agnostic computation engine for state that mixes sync formulas with 
 
 - Derived state is **shared across components** and must stay consistent everywhere.
 - Derived state comes from **multiple async sources** and mixed-state UI is unacceptable.
-- Your backend expects **batched requests** — `batchRequest` coalesces N inputs into one call.
+- Your backend expects **batched requests** — `batchRequest` coalesces an `each()` mapping's per-item lookups into one call.
 - You keep fighting **new-count × old-price** style races — `stalePolicy` eliminates the class.
 
 **Skip it when:**
@@ -207,7 +207,7 @@ Full details: [Core concepts](https://sergeyshmakov.github.io/data-compute/guide
 | Helper | When to use |
 |---|---|
 | `request(deps, config)` | Single async lookup; executes immediately |
-| `batchRequest(deps, config)` | Backend expects coalesced requests — N inputs → one POST |
+| `batchRequest(deps, config)` | Coalesces the per-item requests of an `each()` mapping — N items → one call (concurrent submissions only) |
 | `stalePolicy: "discard"` | Drop stale responses; node stays pending until next cycle |
 | `stalePolicy: "discard-and-retry"` | Drop and immediately re-issue with latest inputs |
 | `graph.computeStatus(accessor)` | `"ready" \| "pending" \| "stale" \| "error"` for UI affordances |

@@ -8,7 +8,7 @@ description: Async data sources, request batching, stale protection, and status.
 | Helper | When to use |
 |---|---|
 | `request(deps, config)` | One async lookup; executes immediately when its inputs are ready |
-| `batchRequest(deps, config)` | Backend expects coalesced requests — N inputs become one POST |
+| `batchRequest(deps, config)` | Coalesces the per-item requests of an `each()` mapping — N items become one POST |
 
 Both produce nodes that participate in the same DAG as sync formulas. Downstream formulas wait for their values automatically.
 
@@ -46,6 +46,7 @@ const graph = createGraph<Form>(
         query: async (entries) => {
           const res = await fetch("/api/pricing/batch", {
             method: "POST",
+            headers: { "Content-Type": "application/json" },
             body: JSON.stringify(entries.map((e) => e.request)),
           });
           const data = await res.json();
@@ -57,7 +58,9 @@ const graph = createGraph<Form>(
 );
 ```
 
-Multiple `compute()` calls within one microtask have their `pricing` lookups coalesced into a single batched query.
+The per-item requests of an `each()` mapping are collected within a microtask and sent as **one** batched query (N items → one call); `dedupeKey` deduplicates across those entries.
+
+**Coalescing scope:** batching combines requests submitted *concurrently* — the per-item lookups of an `each()` mapping. Independent top-level `batchRequest` nodes run in dependency order and each flushes its own query, so they are not merged into a single call.
 
 ## Stale protection
 
