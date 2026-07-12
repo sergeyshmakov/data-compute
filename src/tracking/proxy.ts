@@ -48,30 +48,39 @@ export function dryRunProxy(deps: Set<string>, path = ""): unknown {
 			return dryRunProxy(deps, key);
 		},
 		apply(_target, _thisArg, args) {
-			// This proxy stands in for a method call such as
+			// This proxy stands in for an array-method call such as
 			// `items.reduce((sum, item) => sum + item.total, 0)`. The callback is
 			// never run by the native method (there is no real array), so invoke
-			// it with element proxies to record the property reads inside it.
+			// it with element/array proxies to record the property reads inside it.
 			// The element lives one segment above the method path
-			// (`items.reduce` -> element under `items`); we pass the proxy in the
-			// first two argument slots so it lands on the element parameter for
-			// both `(value, index)` callbacks and reduce's `(acc, value)` form.
+			// (`items.reduce` -> element under `items`).
 			const dotIndex = path.lastIndexOf(".");
 			const parentPath = dotIndex === -1 ? "" : path.slice(0, dotIndex);
+			const methodName = dotIndex === -1 ? path : path.slice(dotIndex + 1);
 			const elementPath = parentPath ? `${parentPath}.0` : "0";
-			for (const arg of args) {
-				if (typeof arg === "function") {
-					const element = dryRunProxy(deps, elementPath);
-					try {
-						(arg as (...callbackArgs: unknown[]) => unknown)(
-							element,
-							element,
-							0,
-						);
-					} catch {
-						// Callback threw against the phantom proxy; reads before the
-						// throw are already recorded.
+			const isReducer = methodName === "reduce" || methodName === "reduceRight";
+
+			const callbackIndex = args.findIndex((arg) => typeof arg === "function");
+			if (callbackIndex !== -1) {
+				const callback = args[callbackIndex] as (
+					...callbackArgs: unknown[]
+				) => unknown;
+				const element = dryRunProxy(deps, elementPath);
+				const array = dryRunProxy(deps, parentPath);
+				// Dispatch by real signature so `array[index]` and reducer args land
+				// correctly: (value, index, array) for iterators and
+				// (acc, value, index, array) for reducers. A concrete index (0) makes
+				// `array[index].prop` resolve to `<parent>.0.prop`. For iterators the
+				// argument after the callback is the user thisArg; forward it.
+				try {
+					if (isReducer) {
+						callback.call(undefined, element, element, 0, array);
+					} else {
+						callback.call(args[callbackIndex + 1], element, 0, array);
 					}
+				} catch {
+					// Callback threw against the phantom proxy; reads before the throw
+					// are already recorded.
 				}
 			}
 			return dryRunProxy(deps, path);

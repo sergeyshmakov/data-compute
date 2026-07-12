@@ -107,6 +107,55 @@ describe("dryRunProxy", () => {
 			items.map((item) => item.price);
 			expect(deps).toContain("items.0.price");
 		});
+
+		it("captures reads via the array argument", () => {
+			const deps = new Set<string>();
+			const items = dryRunProxy(deps, "items") as {
+				map: (
+					cb: (
+						item: unknown,
+						index: number,
+						array: { price: number }[],
+					) => number,
+				) => number[];
+			};
+			items.map((_item, index, array) => array[index].price);
+			expect(deps).toContain("items.0.price");
+		});
+
+		it("captures reducer callbacks with the full (acc, value, index, array) signature", () => {
+			const deps = new Set<string>();
+			const items = dryRunProxy(deps, "items") as {
+				reduce: (
+					cb: (
+						acc: number,
+						item: unknown,
+						index: number,
+						array: { tax: number }[],
+					) => number,
+					init: number,
+				) => number;
+			};
+			items.reduce((acc, _item, index, array) => acc + array[index].tax, 0);
+			expect(deps).toContain("items.0.tax");
+		});
+
+		it("forwards thisArg to the callback", () => {
+			const deps = new Set<string>();
+			const items = dryRunProxy(deps, "items") as {
+				map: (
+					cb: (this: { rate: number }, item: { price: number }) => number,
+					thisArg: { rate: number },
+				) => number[];
+			};
+			items.map(
+				function (item) {
+					return this.rate * item.price;
+				},
+				{ rate: 2 },
+			);
+			expect(deps).toContain("items.0.price");
+		});
 	});
 
 	describe("has returns true", () => {

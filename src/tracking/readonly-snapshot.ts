@@ -74,10 +74,19 @@ export function readonlyTrackedSnapshot<T>(
 	}
 
 	// Binary buffers are atomic values: a Proxy can't wrap them (their length
-	// getter/indexed access require the real receiver), so return them as-is.
-	// The dependency on the containing path is already recorded by the parent.
-	if (ArrayBuffer.isView(value) || value instanceof ArrayBuffer) {
-		return value;
+	// getter/indexed access require the real receiver). Return a shallow copy so
+	// the snapshot stays readonly (the source cannot be mutated through it) while
+	// the dependency on the containing path is still recorded by the parent.
+	if (value instanceof ArrayBuffer) {
+		return value.slice(0) as T;
+	}
+	if (ArrayBuffer.isView(value)) {
+		const view = value as ArrayBufferView & { slice?: () => ArrayBufferView };
+		// Typed arrays copy via slice(); DataView has no slice(), so rebuild it.
+		if (typeof view.slice === "function") return view.slice() as T;
+		return new DataView(
+			value.buffer.slice(value.byteOffset, value.byteOffset + value.byteLength),
+		) as T;
 	}
 
 	const objectValue = value as object;

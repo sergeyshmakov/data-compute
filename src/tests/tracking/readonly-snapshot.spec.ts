@@ -24,6 +24,17 @@ describe("readonlyTrackedSnapshot immutability", () => {
 		expect(snap.d.getUTCFullYear()).toBe(1970);
 	});
 
+	it("returns a copy of typed arrays so the source cannot be mutated", () => {
+		const deps = new Set<string>();
+		const source = new Uint8Array([1, 2, 3]);
+		const snap = readonlyTrackedSnapshot({ bytes: source }, deps, "") as Any;
+
+		snap.bytes[0] = 99;
+		expect(source[0]).toBe(1); // source untouched
+		expect(snap.bytes.length).toBe(3);
+		expect(deps.has("bytes")).toBe(true);
+	});
+
 	it("throws on property assignment", () => {
 		const deps = new Set<string>();
 		const snap = readonlyTrackedSnapshot({ x: 1 }, deps, "") as Any;
