@@ -512,7 +512,7 @@ describe("stalePolicy discard-and-retry", () => {
 });
 
 describe("batch coordinator stale handling", () => {
-	it("does not abort a completed batch signal when stale is detected after await", async () => {
+	it("aborts an in-flight batch signal when a newer compute supersedes it", async () => {
 		const capturedSignals: AbortSignal[] = [];
 		const queryFn = vi
 			.fn()
@@ -544,6 +544,45 @@ describe("batch coordinator stale handling", () => {
 		await new Promise((r) => setTimeout(r, 0));
 		const p2 = graph.compute({});
 		await Promise.all([p1, p2]);
-		expect(capturedSignals[0]?.aborted).toBe(false);
+		// The superseded run's query must have its signal aborted so signal-aware
+		// data sources can cancel instead of running to completion.
+		expect(capturedSignals[0]?.aborted).toBe(true);
+	});
+
+	it("still resolves when a signal-ignoring query is superseded (result discarded)", async () => {
+		let firstQueryCompleted = false;
+		let call = 0;
+		const queryFn = vi.fn().mockImplementation((entries: { id: string }[]) => {
+			call++;
+			const isFirst = call === 1;
+			// This query ignores meta.signal entirely.
+			return new Promise((resolve) => {
+				setTimeout(() => {
+					if (isFirst) firstQueryCompleted = true;
+					resolve([{ id: entries[0].id, response: {} }]);
+				}, 20);
+			});
+		});
+		const graph = createGraph<SlowRoot>(
+			{},
+			{
+				slow: batchRequest(() => ({ id: 0 }), {
+					query: queryFn as BatchDataSourceConfig<
+						{ id: number },
+						string
+					>["query"],
+					stalePolicy: "discard",
+				}),
+			},
+			{ stalePolicy: "discard" },
+		);
+		const p1 = graph.compute({});
+		await new Promise((r) => setTimeout(r, 0));
+		const p2 = graph.compute({});
+		// Neither compute rejects; the superseded query keeps running (it ignores
+		// the abort signal) and its stale result is simply discarded.
+		await expect(Promise.all([p1, p2])).resolves.toBeDefined();
+		await new Promise((r) => setTimeout(r, 40));
+		expect(firstQueryCompleted).toBe(true);
 	});
 });

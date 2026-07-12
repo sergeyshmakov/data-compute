@@ -81,6 +81,10 @@ class ComputeGraph<Root> implements Graph<Root> {
 	private readonly flatNodeByPath: ReadonlyMap<string, FlatNode>;
 	private readonly wildcardPrefixes: ReadonlySet<string>;
 
+	// Coordinators of in-flight runs, aborted when a newer compute() supersedes
+	// them so their pending batch queries can cancel via the AbortSignal.
+	private readonly liveCoordinators = new Set<BatchCoordinator>();
+
 	// Runtime node state
 	private readonly nodeStatus = new Map<string, NodeStatus>();
 	private readonly nodeSnap = new Map<string, NodeSnapshot<unknown>>();
@@ -165,6 +169,12 @@ class ComputeGraph<Root> implements Graph<Root> {
 
 	compute(input: ComputeInput<Root>): Promise<DeepPartial<Root>> {
 		this.version++;
+		// Any run still in flight is now superseded; abort its pending batch
+		// queries so signal-aware data sources can cancel instead of running to
+		// completion (their results would be discarded anyway).
+		for (const coordinator of this.liveCoordinators) {
+			coordinator.abort();
+		}
 		this.pendingPatches.push(input as DeepPartial<Root>);
 
 		if (!this.computePromise) {
@@ -216,14 +226,23 @@ class ComputeGraph<Root> implements Graph<Root> {
 			1,
 			nodeCount * (nodeCount - 1),
 		);
-		return this.runAttempts(
-			runId,
-			currentVersion,
-			graphStalePolicy,
-			inputPatch,
-			baseState,
-			maxRuntimeDependencyRetries,
-		);
+		const runCoordinators = new Set<BatchCoordinator>();
+		try {
+			return await this.runAttempts(
+				runId,
+				currentVersion,
+				graphStalePolicy,
+				inputPatch,
+				baseState,
+				maxRuntimeDependencyRetries,
+				runCoordinators,
+			);
+		} finally {
+			// This run has finished; its coordinators can no longer be superseded.
+			for (const coordinator of runCoordinators) {
+				this.liveCoordinators.delete(coordinator);
+			}
+		}
 	}
 
 	private async runAttempts(
@@ -233,6 +252,7 @@ class ComputeGraph<Root> implements Graph<Root> {
 		inputPatch: Record<string, unknown>,
 		baseState: unknown,
 		maxRuntimeDependencyRetries: number,
+		runCoordinators: Set<BatchCoordinator>,
 	): Promise<DeepPartial<Root>> {
 		let runtimeDependencyRetries = 0;
 		while (true) {
@@ -253,6 +273,8 @@ class ComputeGraph<Root> implements Graph<Root> {
 			);
 
 			const batchCoordinator = new BatchCoordinator();
+			this.liveCoordinators.add(batchCoordinator);
+			runCoordinators.add(batchCoordinator);
 			const attemptOrder = [...this.order];
 			const attemptIndex = new Map(
 				attemptOrder.map((path, index) => [path, index]),
