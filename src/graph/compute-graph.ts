@@ -858,14 +858,23 @@ class ComputeGraph<Root> implements Graph<Root> {
 			this.reverseMap = buildReverseDepsMap(this.depsMap);
 		}
 
-		// Execution topology: replace this node's working edges with what it
-		// actually read this run (branch-aware), then re-sort. Unlike the
-		// accumulated map, this never unions mutually-exclusive branches into a
-		// false cycle.
+		// Execution topology: record what this node actually read this run
+		// (branch-aware), then re-sort. Unlike the accumulated map, this never
+		// unions mutually-exclusive branches into a false cycle.
+		const wasRan = topo.ran.has(node.path);
 		const prevWorking = topo.working.get(node.path) ?? new Set<string>();
-		topo.working.set(node.path, actual);
+		// Non-each nodes replace their edges with this run's reads. An each
+		// template runs once per item under one node.path: the first item this run
+		// replaces the static seed, later items union, so the template's edges
+		// reflect every producer any item read — not just the last item to finish.
+		const nextWorking =
+			node.isEach && wasRan ? new Set([...prevWorking, ...actual]) : actual;
+		topo.working.set(node.path, nextWorking);
 		topo.ran.add(node.path);
-		if (!sameSet(prevWorking, actual)) {
+		// Re-sort when the edges changed, or when this node's reads are newly
+		// confirmed: entering `ran` changes which edges the cycle check treats as
+		// confirmed, so a freshly-formed confirmed cycle is surfaced right away.
+		if (!wasRan || !sameSet(prevWorking, nextWorking)) {
 			this.refreshRunTopology(topo);
 		}
 
