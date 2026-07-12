@@ -742,6 +742,7 @@ class ComputeGraph<Root> implements Graph<Root> {
 				attemptIndex,
 				orderIndex,
 				topo,
+				state,
 			);
 			if (!shouldRetry) {
 				// Gate on the deps ACTUALLY read this run, not the accumulated
@@ -751,7 +752,7 @@ class ComputeGraph<Root> implements Graph<Root> {
 				// downstream symptom of reading the failed dep's stale value).
 				const depError = this.dependencyErrorFrom(
 					node.path,
-					this.actualDeps(node, accessed),
+					this.actualDeps(node, accessed, state),
 				);
 				if (depError) throw depError;
 			}
@@ -787,6 +788,7 @@ class ComputeGraph<Root> implements Graph<Root> {
 			attemptIndex,
 			orderIndex,
 			topo,
+			state,
 		);
 		if (shouldRetry) return { result: undefined, shouldRetry: true };
 		if (requestThrew) throw requestError;
@@ -795,7 +797,7 @@ class ComputeGraph<Root> implements Graph<Root> {
 		// garbage inputs, and an unread alternate-branch dep must not gate at all.
 		const depError = this.dependencyErrorFrom(
 			node.path,
-			this.actualDeps(node, accessed),
+			this.actualDeps(node, accessed, state),
 		);
 		if (depError) throw depError;
 
@@ -818,14 +820,30 @@ class ComputeGraph<Root> implements Graph<Root> {
 	 * tracked accesses. Branch-aware: reflects the branch taken this run, unlike
 	 * the accumulated `depsMap` superset.
 	 */
-	private actualDeps(node: FlatNode, accessed: Set<string>): Set<string> {
+	private actualDeps(
+		node: FlatNode,
+		accessed: Set<string>,
+		state: Record<string, unknown>,
+	): Set<string> {
 		const deps = pathDependencies(accessed, node.path, this.wildcardPrefixes);
-		// Mirror the build-time container expansion: a container read discovered
-		// only at runtime (e.g. an async formula that awaits, then spreads
-		// f.nested) must still depend on computed descendants so it reorders and
-		// retries instead of committing stale/empty container data.
+		// Containers to expand to their computed descendants:
+		//   1. enumerated whole-container reads (spread / Object.keys), which
+		//      depend on every child even ones absent during the read;
+		//   2. containers read while absent — a nested access like `f.nested.value`
+		//      records only `nested` when `nested` is null/undefined (there is no
+		//      proxy to trap `.value`), so the computed child is otherwise missed
+		//      and the node commits stale data instead of waiting for it.
+		// A present container read as a plain property is NOT expanded (that would
+		// over-depend on every child); only absent ones are, and the retry then
+		// re-reads the now-present container and records the precise child.
+		const containers = new Set<string>(enumeratedPaths(accessed));
+		for (const path of accessed) {
+			if (containers.has(path)) continue;
+			const value = getByPath(state, path);
+			if (value === undefined || value === null) containers.add(path);
+		}
 		for (const descendant of containerDescendants(
-			enumeratedPaths(accessed),
+			containers,
 			node.path,
 			this.computedKeys,
 			this.wildcardPrefixes,
@@ -841,8 +859,9 @@ class ComputeGraph<Root> implements Graph<Root> {
 		attemptIndex: ReadonlyMap<string, number>,
 		orderIndex: number,
 		topo: RunTopology,
+		state: Record<string, unknown>,
 	): boolean {
-		const actual = this.actualDeps(node, accessed);
+		const actual = this.actualDeps(node, accessed, state);
 
 		// Introspection: accumulate the discovered superset (deps/dependents/…).
 		const introCurrent = this.depsMap.get(node.path) ?? new Set<string>();
