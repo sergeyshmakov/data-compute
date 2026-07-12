@@ -134,6 +134,19 @@ class ComputeGraph<Root> implements Graph<Root> {
 			);
 		}
 
+		// A path must have exactly one producer. If the same path is defined by
+		// both a formula and a data source, the Map below would silently keep only
+		// the last-flattened one, making the result depend on argument order.
+		const seenPaths = new Set<string>();
+		for (const node of this.flatNodes) {
+			if (seenPaths.has(node.path)) {
+				throw new Error(
+					`Duplicate producer for "${node.path}": a node path may be defined by only one formula or data source.`,
+				);
+			}
+			seenPaths.add(node.path);
+		}
+
 		this.flatNodeByPath = new Map(
 			this.flatNodes.map((node) => [node.path, node]),
 		);
