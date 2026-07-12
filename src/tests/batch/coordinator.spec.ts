@@ -220,4 +220,54 @@ describe("BatchCoordinator", () => {
 			await expect(p2).rejects.toThrow("query error");
 		});
 	});
+
+	describe("dedupeKey throws", () => {
+		it("rejects all pending submits instead of hanging", async () => {
+			const queryFn = vi.fn();
+			const config: BatchDataSourceConfig<{ k: number }, string> = {
+				query: queryFn as BatchDataSourceConfig<{ k: number }, string>["query"],
+				dedupeKey: () => {
+					throw new Error("bad key");
+				},
+			};
+			const coordinator = new BatchCoordinator();
+			const p1 = coordinator.submit(config, { k: 1 });
+			const p2 = coordinator.submit(config, { k: 2 });
+			await expect(p1).rejects.toThrow("bad key");
+			await expect(p2).rejects.toThrow("bad key");
+			expect(queryFn).not.toHaveBeenCalled();
+		});
+	});
+
+	describe("channel keying", () => {
+		it("keeps configs sharing a query fn but differing dedupeKey on separate channels", async () => {
+			const query = vi
+				.fn()
+				.mockImplementation(async (entries: { id: string }[]) =>
+					entries.map((e) => ({ id: e.id, response: "ok" })),
+				);
+			// Same query reference, different dedupeKey configuration.
+			const deduped: BatchDataSourceConfig<{ k: string }, string> = {
+				query: query as BatchDataSourceConfig<{ k: string }, string>["query"],
+				dedupeKey: () => "same",
+			};
+			const notDeduped: BatchDataSourceConfig<{ k: string }, string> = {
+				query: query as BatchDataSourceConfig<{ k: string }, string>["query"],
+			};
+			const coordinator = new BatchCoordinator();
+			await Promise.all([
+				coordinator.submit(deduped, { k: "a" }),
+				coordinator.submit(deduped, { k: "b" }),
+				coordinator.submit(notDeduped, { k: "c" }),
+				coordinator.submit(notDeduped, { k: "d" }),
+			]);
+			// Two separate channels → two query calls; the deduped channel collapses
+			// its two entries to one, the other keeps both.
+			expect(query).toHaveBeenCalledTimes(2);
+			const callSizes = query.mock.calls
+				.map((c) => (c[0] as unknown[]).length)
+				.sort();
+			expect(callSizes).toEqual([1, 2]);
+		});
+	});
 });

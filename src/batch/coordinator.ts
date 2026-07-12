@@ -31,7 +31,10 @@ export class BatchCoordinator {
 	): Promise<Res> {
 		return new Promise((resolve, reject) => {
 			const id = String(++this.nextId);
-			const key = config.query as object;
+			// Key channels by config identity, not config.query: two configs that
+			// share a query fn but differ in dedupeKey must not be merged into one
+			// channel (which would apply one config's dedupe rule to the other).
+			const key = config as object;
 			let list = this.pending.get(key);
 			if (!list) {
 				list = [];
@@ -72,8 +75,8 @@ export class BatchCoordinator {
 		this.pending.clear();
 		this.configs.clear();
 
-		for (const [queryFn, entries] of snapshotPending) {
-			const config = snapshotConfigs.get(queryFn);
+		for (const [channelKey, entries] of snapshotPending) {
+			const config = snapshotConfigs.get(channelKey);
 			if (config) await this.flushChannel(config, entries);
 		}
 	}
@@ -87,17 +90,24 @@ export class BatchCoordinator {
 
 		if (config.dedupeKey) {
 			const seen = new Map<string, string>(); // dedupeKey → batch entry id
-			for (const e of entries) {
-				const dk = config.dedupeKey(e.request);
-				const existingId = seen.get(dk);
-				if (existingId !== undefined) {
-					const arr = receivers.get(existingId);
-					if (arr) arr.push(e);
-				} else {
-					seen.set(dk, e.id);
-					batchEntries.push({ id: e.id, request: e.request });
-					receivers.set(e.id, [e]);
+			try {
+				for (const e of entries) {
+					const dk = config.dedupeKey(e.request);
+					const existingId = seen.get(dk);
+					if (existingId !== undefined) {
+						const arr = receivers.get(existingId);
+						if (arr) arr.push(e);
+					} else {
+						seen.set(dk, e.id);
+						batchEntries.push({ id: e.id, request: e.request });
+						receivers.set(e.id, [e]);
+					}
 				}
+			} catch (err) {
+				// A throwing dedupeKey must reject the queued entries, not leave
+				// their promises pending (and their rejection unhandled).
+				for (const e of entries) e.reject(err);
+				return;
 			}
 		} else {
 			for (const e of entries) {
