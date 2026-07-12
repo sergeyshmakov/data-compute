@@ -22,6 +22,9 @@ describe("output patch does not leak caller-supplied computed values", () => {
 
 		const result = await graph.compute({ computed: 999 });
 
+		expect(onError).toHaveBeenCalledWith(
+			expect.objectContaining({ key: "computed" }),
+		);
 		expect(result.computed).toBeUndefined();
 		expect(result.other).toBe(7);
 		expect(setState).toHaveBeenCalledTimes(1);
