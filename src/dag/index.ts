@@ -127,9 +127,11 @@ export function topoSort(
 	}
 
 	const order: string[] = [];
-	while (queue.length > 0) {
-		const n = queue.shift();
-		if (n === undefined) break;
+	// Track a head index instead of Array.shift() (which reindexes the whole
+	// queue each pop) so large independent-node graphs sort in linear time.
+	let head = 0;
+	while (head < queue.length) {
+		const n = queue[head++];
 		order.push(n);
 		for (const s of successors.get(n) ?? []) {
 			const deg = inDeg.get(s);

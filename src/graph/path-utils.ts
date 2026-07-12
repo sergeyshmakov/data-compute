@@ -22,6 +22,8 @@ export function getByPath(obj: unknown, path: string): unknown {
 	let curr: unknown = obj;
 	for (const p of parts) {
 		if (curr === null || curr === undefined) return undefined;
+		// Never traverse into prototype-polluting keys, even on reads.
+		if (unsafePathSegments.has(p)) return undefined;
 		curr = (curr as Record<string, unknown>)[p];
 	}
 	return curr;
