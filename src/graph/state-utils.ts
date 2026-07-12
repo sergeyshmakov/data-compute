@@ -104,6 +104,45 @@ function cloneFallback(
 	return output;
 }
 
+// structuredClone copies own `__proto__`/`constructor`/`prototype` *data*
+// properties verbatim (e.g. from a JSON-parsed patch like `{ a: { __proto__: … } }`)
+// via CreateDataProperty, so they survive the clone nested anywhere in the tree.
+// Strip them from the fresh copy so a consumer applying the patch via [[Set]]
+// (the documented deep-merge style) can't pollute the prototype chain.
+function stripUnsafeKeysDeep(
+	value: unknown,
+	seen = new WeakSet<object>(),
+): void {
+	if (value === null || typeof value !== "object") return;
+	const objectValue = value as object;
+	if (seen.has(objectValue)) return;
+	seen.add(objectValue);
+
+	if (Array.isArray(value)) {
+		for (let i = 0; i < value.length; i++) {
+			if (i in value) stripUnsafeKeysDeep(value[i], seen);
+		}
+		return;
+	}
+	if (value instanceof Map) {
+		for (const mapValue of value.values()) stripUnsafeKeysDeep(mapValue, seen);
+		return;
+	}
+	if (value instanceof Set) {
+		for (const setValue of value) stripUnsafeKeysDeep(setValue, seen);
+		return;
+	}
+	// Date / typed arrays / ArrayBuffer are atomic — nothing to strip.
+	if (!isPlainObject(value)) return;
+
+	for (const key of UNSAFE_KEYS) {
+		if (Object.hasOwn(value, key)) delete value[key];
+	}
+	for (const key of Object.keys(value)) {
+		stripUnsafeKeysDeep(value[key], seen);
+	}
+}
+
 export function cloneForCompute<T>(value: T): T {
 	if (
 		value === null ||
@@ -113,7 +152,9 @@ export function cloneForCompute<T>(value: T): T {
 	}
 
 	try {
-		return structuredClone(value) as T;
+		const cloned = structuredClone(value);
+		stripUnsafeKeysDeep(cloned);
+		return cloned as T;
 	} catch {
 		return cloneFallback(value) as T;
 	}
