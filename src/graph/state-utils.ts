@@ -5,7 +5,10 @@ function isPlainObject(item: unknown): item is Record<string, unknown> {
 		!Array.isArray(item) &&
 		!(item instanceof Date) &&
 		!(item instanceof Set) &&
-		!(item instanceof Map)
+		!(item instanceof Map) &&
+		// Binary buffers are atomic values, not mergeable/cloneable objects.
+		!ArrayBuffer.isView(item) &&
+		!(item instanceof ArrayBuffer)
 	);
 }
 
@@ -164,6 +167,13 @@ export function deepFreezeSnapshot<T>(
 	const objectValue = value as object;
 	if (seen.has(objectValue)) return value;
 	seen.add(objectValue);
+
+	// Object.freeze throws on ArrayBuffers and non-empty typed-array/DataView
+	// views ("Cannot freeze array buffer views with elements"). Treat binary
+	// buffers as atomic immutable values and leave them untouched.
+	if (ArrayBuffer.isView(value) || value instanceof ArrayBuffer) {
+		return value;
+	}
 
 	if (Array.isArray(value)) {
 		for (const item of value) deepFreezeSnapshot(item, seen);

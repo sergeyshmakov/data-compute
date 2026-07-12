@@ -76,6 +76,23 @@ describe("interceptor error paths", () => {
 		expect(result.dependent).toBe(1000);
 	});
 
+	it("does not reject when state contains a typed array", async () => {
+		interface BytesRoot {
+			bytes: Uint8Array;
+			len: number;
+		}
+		const graph = createGraph<BytesRoot>(
+			{ len: (f) => f.bytes.length },
+			undefined,
+			{
+				interceptors: [(_path, value, _state, next) => next(value)],
+			},
+		);
+
+		const result = await graph.compute({ bytes: new Uint8Array([1, 2, 3]) });
+		expect(result.len).toBe(3);
+	});
+
 	it("runs multiple interceptors in array order, threading the value through", async () => {
 		const order: string[] = [];
 		const graph = makeGraph([
