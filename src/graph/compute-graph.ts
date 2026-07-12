@@ -356,14 +356,10 @@ class ComputeGraph<Root> implements Graph<Root> {
 					break;
 				}
 
-				const dependencyError = this.dependencyErrorFor(templatePath);
-				if (dependencyError) {
-					this.setNodeError(templatePath, dependencyError);
-					this.options.onError?.({ key: templatePath, cause: dependencyError });
-					continue;
-				}
-
 				if (node.isEach) {
+					// No template-level pre-gate: each item flows through the actual-
+					// reads gate in executeNode, so an item that reads a failed dep
+					// errors on its own and an unread alternate-branch dep never gates.
 					const expansions = expandRuntimePaths(templatePath, state);
 					const outcomes = await Promise.all(
 						expansions.map(async ({ runtimePath, item, itemPath }) => {
@@ -705,6 +701,18 @@ class ComputeGraph<Root> implements Graph<Root> {
 				attemptIndex,
 				orderIndex,
 			);
+			if (!shouldRetry) {
+				// Gate on the deps ACTUALLY read this run, not the accumulated
+				// superset, so an alternate-branch dependency that errored but was
+				// not read this run cannot suppress this node's valid output. Prefer
+				// the dependency error over the formula's own throw (which may be a
+				// downstream symptom of reading the failed dep's stale value).
+				const depError = this.dependencyErrorFrom(
+					node.path,
+					this.actualDeps(node, accessed),
+				);
+				if (depError) throw depError;
+			}
 			if (didThrow && !shouldRetry) throw caught;
 			return { result, shouldRetry };
 		}
@@ -739,6 +747,14 @@ class ComputeGraph<Root> implements Graph<Root> {
 		);
 		if (shouldRetry) return { result: undefined, shouldRetry: true };
 		if (requestThrew) throw requestError;
+		// Gate on the deps actually read while building the request, before
+		// issuing the query — a failed dependency must not fire a network call on
+		// garbage inputs, and an unread alternate-branch dep must not gate at all.
+		const depError = this.dependencyErrorFrom(
+			node.path,
+			this.actualDeps(node, accessed),
+		);
+		if (depError) throw depError;
 
 		let result: unknown;
 		if (node.type === "batch" && node.config) {
@@ -754,17 +770,13 @@ class ComputeGraph<Root> implements Graph<Root> {
 		return { result, shouldRetry: false };
 	}
 
-	private recordRuntimeDependencies(
-		node: FlatNode,
-		accessed: Set<string>,
-		attemptIndex: ReadonlyMap<string, number>,
-		orderIndex: number,
-	): boolean {
-		const runtimeDeps = pathDependencies(
-			accessed,
-			node.path,
-			this.wildcardPrefixes,
-		);
+	/**
+	 * The dependency nodes a node actually read on this run, derived from its
+	 * tracked accesses. Branch-aware: reflects the branch taken this run, unlike
+	 * the accumulated `depsMap` superset.
+	 */
+	private actualDeps(node: FlatNode, accessed: Set<string>): Set<string> {
+		const deps = pathDependencies(accessed, node.path, this.wildcardPrefixes);
 		// Mirror the build-time container expansion: a container read discovered
 		// only at runtime (e.g. an async formula that awaits, then spreads
 		// f.nested) must still depend on computed descendants so it reorders and
@@ -775,8 +787,18 @@ class ComputeGraph<Root> implements Graph<Root> {
 			this.computedKeys,
 			this.wildcardPrefixes,
 		)) {
-			runtimeDeps.add(descendant);
+			deps.add(descendant);
 		}
+		return deps;
+	}
+
+	private recordRuntimeDependencies(
+		node: FlatNode,
+		accessed: Set<string>,
+		attemptIndex: ReadonlyMap<string, number>,
+		orderIndex: number,
+	): boolean {
+		const runtimeDeps = this.actualDeps(node, accessed);
 		const currentDeps = this.depsMap.get(node.path) ?? new Set<string>();
 		const addedDeps: string[] = [];
 		const addedComputedDeps: string[] = [];
@@ -971,8 +993,11 @@ class ComputeGraph<Root> implements Graph<Root> {
 		return "applied";
 	}
 
-	private dependencyErrorFor(path: string): Error | undefined {
-		for (const dep of this.depsMap.get(path) ?? []) {
+	private dependencyErrorFrom(
+		path: string,
+		deps: Iterable<string>,
+	): Error | undefined {
+		for (const dep of deps) {
 			if (!this.flatNodeByPath.has(dep)) continue;
 			const snap = this.nodeSnap.get(dep);
 			if (snap?.status !== "error") continue;
