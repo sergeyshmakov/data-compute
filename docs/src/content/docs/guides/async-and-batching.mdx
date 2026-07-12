@@ -34,33 +34,45 @@ const graph = createGraph<Form>(
 
 ## `batchRequest` — coalesced
 
-```ts
-import { createGraph, batchRequest } from "data-compute";
+Use `batchRequest` inside an `each()` mapping so every item's lookup is collected into a single call:
 
-const graph = createGraph<Form>(
-  { /* formulas */ },
+```ts
+import { createGraph, each, batchRequest } from "data-compute";
+
+// One POST resolves every line item's price, not one request per item.
+const graph = createGraph<Cart>(
+  {},
   {
-    pricing: batchRequest(
-      (f) => ({ productId: f.productId, quantity: f.quantity }),
-      {
-        query: async (entries) => {
-          const res = await fetch("/api/pricing/batch", {
-            method: "POST",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify(entries.map((e) => e.request)),
-          });
-          const data = await res.json();
-          return entries.map((e, i) => ({ id: e.id, response: data[i] }));
+    items: each({
+      price: batchRequest(
+        (item) => ({ sku: item.sku, qty: item.qty }),
+        {
+          query: async (entries) => {
+            const res = await fetch("/api/pricing/batch", {
+              method: "POST",
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify(entries.map((e) => e.request)),
+            });
+            const data = await res.json();
+            return entries.map((e, i) => ({ id: e.id, response: data[i] }));
+          },
         },
-      },
-    ),
+      ),
+    }),
   },
 );
+
+await graph.compute({
+  items: [
+    { sku: "a", qty: 1, price: 0 },
+    { sku: "b", qty: 2, price: 0 },
+  ],
+});
 ```
 
-The per-item requests of an `each()` mapping are collected within a microtask and sent as **one** batched query (N items → one call); `dedupeKey` deduplicates across those entries.
+The per-item requests of the `each()` mapping are collected within a microtask and sent as **one** batched query (N items → one call); `dedupeKey` deduplicates across those entries.
 
-**Coalescing scope:** batching combines requests submitted *concurrently* — the per-item lookups of an `each()` mapping. Independent top-level `batchRequest` nodes run in dependency order and each flushes its own query, so they are not merged into a single call.
+**Coalescing scope:** batching combines requests submitted *concurrently* — the per-item lookups of an `each()` mapping. Independent top-level `batchRequest` nodes run in dependency order and each flushes its own query, so they are **not** merged into a single call.
 
 ## Stale protection
 
@@ -136,7 +148,7 @@ Synchronous subgraphs that don't touch async nodes execute synchronously — no 
 | Scenario | Recommended |
 |---|---|
 | Single API call per cycle | `request` |
-| Many components triggering the same lookup | `batchRequest` |
-| Backend offers a bulk endpoint | `batchRequest` |
+| Per-item lookups across an `each()` array | `batchRequest` (inside `each()`) |
+| Backend offers a bulk endpoint for those items | `batchRequest` |
 | Inputs change during the in-flight request | `stalePolicy: "discard-and-retry"` |
 | Status-aware UI (spinners, disabled buttons) | `graph.computeStatus` |
