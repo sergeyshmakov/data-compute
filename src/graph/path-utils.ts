@@ -79,6 +79,9 @@ export function expandRuntimePaths(
 	templatePath: string,
 	state: Record<string, unknown>,
 ): RuntimeExpansion[] {
+	// Guard before walking segments: a template path must never traverse
+	// prototype-polluting keys, consistent with getByPath/setByPath/deleteByPath.
+	assertSafePath(templatePath);
 	const segments = templatePath.split(".");
 	const expansions: RuntimeExpansion[] = [];
 

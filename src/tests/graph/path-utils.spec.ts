@@ -1,5 +1,9 @@
 import { describe, expect, it } from "vitest";
-import { setByPath } from "../../graph/path-utils.js";
+import {
+	deleteByPath,
+	expandRuntimePaths,
+	setByPath,
+} from "../../graph/path-utils.js";
 
 describe("path utils", () => {
 	it("rejects prototype-polluting path segments", () => {
@@ -14,6 +18,13 @@ describe("path utils", () => {
 			expect(({} as Record<string, unknown>).polluted).toBeUndefined();
 		} finally {
 			delete (Object.prototype as Record<string, unknown>).polluted;
+		}
+	});
+
+	it("rejects unsafe segments in expandRuntimePaths and deleteByPath", () => {
+		for (const path of ["__proto__", "a.constructor.b", "x.prototype"]) {
+			expect(() => expandRuntimePaths(path, {})).toThrow(/Unsafe path segment/);
+			expect(() => deleteByPath({}, path)).toThrow(/Unsafe path segment/);
 		}
 	});
 });
