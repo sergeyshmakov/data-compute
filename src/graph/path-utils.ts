@@ -1,3 +1,5 @@
+import { normalizePath } from "../dag/index.js";
+
 export interface RuntimeExpansion {
 	runtimePath: string;
 	itemPath: string;
@@ -29,9 +31,16 @@ export function setByPath(
 	obj: Record<string, unknown>,
 	path: string,
 	value: unknown,
+	wildcardPrefixes?: ReadonlySet<string>,
 ): void {
 	assertSafePath(path);
 	const parts = path.split(".");
+	// A missing container is created as an array only when the next segment is a
+	// genuine array-index (a `*` wildcard position), so numeric object keys
+	// (e.g. `Record<number, T>`) don't get coerced into arrays.
+	const template = wildcardPrefixes
+		? normalizePath(path, wildcardPrefixes).split(".")
+		: undefined;
 	let curr: Record<string, unknown> = obj;
 	for (let i = 0; i < parts.length - 1; i++) {
 		const p = parts[i];
@@ -40,7 +49,10 @@ export function setByPath(
 			curr[p] === null ||
 			typeof curr[p] !== "object"
 		) {
-			curr[p] = /^\d+$/.test(parts[i + 1]) ? [] : {};
+			const nextIsIndex = template
+				? template[i + 1] === "*"
+				: /^\d+$/.test(parts[i + 1]);
+			curr[p] = nextIsIndex ? [] : {};
 		}
 		curr = curr[p] as Record<string, unknown>;
 	}

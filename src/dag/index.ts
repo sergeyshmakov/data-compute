@@ -1,13 +1,53 @@
 /**
- * Normalizes a runtime path to a template path.
+ * Collects the set of wildcard prefixes present in a set of template node
+ * paths. A wildcard prefix is any prefix that ends in a `*` segment, e.g. the
+ * template `"items.*.tax"` contributes `"items.*"`. Used to normalize runtime
+ * paths without misclassifying genuine numeric object keys as array indices.
+ */
+export function buildWildcardPrefixes(
+	nodePaths: Iterable<string>,
+): Set<string> {
+	const prefixes = new Set<string>();
+	for (const path of nodePaths) {
+		const segments = path.split(".");
+		for (let i = 0; i < segments.length; i++) {
+			if (segments[i] === "*") {
+				prefixes.add(segments.slice(0, i + 1).join("."));
+			}
+		}
+	}
+	return prefixes;
+}
+
+/**
+ * Normalizes a runtime path to a template path by replacing array-index
+ * segments with `*`.
  * "items.0.price" -> "items.*.price"
  * "nested.array.1" -> "nested.array.*"
+ *
+ * When `wildcardPrefixes` is supplied, a numeric segment is only treated as an
+ * array index (and rewritten to `*`) if the resulting prefix is a known
+ * wildcard position in the graph. This keeps genuine numeric object keys
+ * (e.g. `Record<number, T>` or status-code maps) from colliding with array
+ * indices. When omitted, every all-digits segment is rewritten (legacy
+ * behavior).
  */
-export function normalizePath(path: string): string {
-	return path
-		.split(".")
-		.map((segment) => (/^\d+$/.test(segment) ? "*" : segment))
-		.join(".");
+export function normalizePath(
+	path: string,
+	wildcardPrefixes?: ReadonlySet<string>,
+): string {
+	const segments = path.split(".");
+	const out: string[] = [];
+	for (const segment of segments) {
+		if (/^\d+$/.test(segment)) {
+			if (!wildcardPrefixes || wildcardPrefixes.has([...out, "*"].join("."))) {
+				out.push("*");
+				continue;
+			}
+		}
+		out.push(segment);
+	}
+	return out.join(".");
 }
 
 /**
@@ -18,12 +58,13 @@ export function normalizePath(path: string): string {
 export function pathDependencies(
 	accessed: Set<string>,
 	self: string,
+	wildcardPrefixes?: ReadonlySet<string>,
 ): Set<string> {
 	const result = new Set<string>();
-	const selfTemplate = normalizePath(self);
+	const selfTemplate = normalizePath(self, wildcardPrefixes);
 
 	for (const p of accessed) {
-		const template = normalizePath(p);
+		const template = normalizePath(p, wildcardPrefixes);
 
 		// Add the full path
 		if (template !== selfTemplate) {
