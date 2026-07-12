@@ -719,6 +719,13 @@ class ComputeGraph<Root> implements Graph<Root> {
 		let requestError: unknown;
 		try {
 			request = node.fn(localState, rootState);
+			// Materialize before recording dependencies (same reasoning as formula
+			// results above): if the deps function returned a snapshot container
+			// directly (e.g. `f.filters`), cloning deproxies it — so the query
+			// receives a plain request object, not a readonly tracking proxy — and
+			// reading through the container records dependencies on any computed
+			// children it aliases (so a listed-before child triggers a retry).
+			request = cloneForCompute(request);
 		} catch (cause) {
 			requestThrew = true;
 			requestError = cause;
