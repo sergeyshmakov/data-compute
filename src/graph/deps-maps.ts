@@ -1,4 +1,8 @@
-import { buildWildcardPrefixes, pathDependencies } from "../dag/index.js";
+import {
+	buildWildcardPrefixes,
+	normalizePath,
+	pathDependencies,
+} from "../dag/index.js";
 import { dryRunProxy } from "../tracking/proxy.js";
 import type { FlatNode } from "./flatten.js";
 
@@ -11,12 +15,62 @@ function isThenable(value: unknown): value is PromiseLike<unknown> {
 }
 
 /**
+ * Given the paths a formula actually read, returns the computed nodes it depends
+ * on by virtue of reading a whole container.
+ *
+ * A "container read" is a maximal accessed path — one with no deeper accessed
+ * path beneath it. Reading `{ ...f.nested }` records only `nested` (maximal), so
+ * it depends on every computed descendant (`nested.value`, ...). A leaf read
+ * like `f.nested.value` records `nested` AND `nested.value`; only the latter is
+ * maximal, so `nested` is treated as incidental traversal and is NOT expanded —
+ * which avoids pulling in unrelated computed siblings (and the false cycles that
+ * would create).
+ *
+ * Callers must pass the dry-run/runtime accessed set only, never the injected
+ * ancestor paths, or independent siblings would be linked.
+ */
+export function containerDescendants(
+	accessed: Iterable<string>,
+	self: string,
+	nodePaths: Iterable<string>,
+	wildcardPrefixes?: ReadonlySet<string>,
+): Set<string> {
+	const normalized = new Set<string>();
+	for (const path of accessed) {
+		normalized.add(normalizePath(path, wildcardPrefixes));
+	}
+
+	const result = new Set<string>();
+	const nodes = [...nodePaths];
+	for (const containerPath of normalized) {
+		const prefix = `${containerPath}.`;
+		// Only maximal paths represent a whole-container read.
+		let hasDeeper = false;
+		for (const other of normalized) {
+			if (other !== containerPath && other.startsWith(prefix)) {
+				hasDeeper = true;
+				break;
+			}
+		}
+		if (hasDeeper) continue;
+
+		for (const candidate of nodes) {
+			if (candidate !== self && candidate.startsWith(prefix)) {
+				result.add(candidate);
+			}
+		}
+	}
+	return result;
+}
+
+/**
  * Builds a map from each node path to the set of paths it reads.
  * Runs each formula/deps function with a dry-run proxy to capture accessed paths.
  */
 export function buildDepsMap(nodes: FlatNode[]): Map<string, Set<string>> {
 	const depsMap = new Map<string, Set<string>>();
-	const wildcardPrefixes = buildWildcardPrefixes(nodes.map((n) => n.path));
+	const nodePaths = nodes.map((n) => n.path);
+	const wildcardPrefixes = buildWildcardPrefixes(nodePaths);
 	for (const node of nodes) {
 		const accessed = new Set<string>();
 		const rootProxy = dryRunProxy(accessed, "");
@@ -47,6 +101,16 @@ export function buildDepsMap(nodes: FlatNode[]): Map<string, Set<string>> {
 			// Sync accesses are already captured.
 		}
 
+		// Reading a whole container depends on its computed descendants. Compute
+		// this from the dry-run accesses only, before injecting ancestor paths
+		// below (injected ancestors must not be treated as container reads).
+		const descendants = containerDescendants(
+			accessed,
+			node.path,
+			nodePaths,
+			wildcardPrefixes,
+		);
+
 		// Also depend on the parent object implicitly (if path is "a.b", it depends on "a")
 		const parts = node.path.split(".");
 		for (let i = 1; i < parts.length; i++) {
@@ -54,31 +118,9 @@ export function buildDepsMap(nodes: FlatNode[]): Map<string, Set<string>> {
 			accessed.add(parentPath);
 		}
 
-		depsMap.set(
-			node.path,
-			pathDependencies(accessed, node.path, wildcardPrefixes),
-		);
-	}
-
-	// Expand container reads to their computed descendants. A formula that reads
-	// a whole container (e.g. `{ ...f.nested }`) records only the parent path
-	// "nested", which matches no exact node, so it would run before a computed
-	// child like "nested.value" and publish stale data. For each such dependency
-	// add the computed descendant nodes. Skip a node's own ancestor paths —
-	// expanding those would link independent siblings and create false cycles.
-	const nodePaths = nodes.map((n) => n.path);
-	for (const [node, deps] of depsMap) {
-		const expanded = new Set(deps);
-		for (const dep of deps) {
-			if (node === dep || node.startsWith(`${dep}.`)) continue;
-			const prefix = `${dep}.`;
-			for (const candidate of nodePaths) {
-				if (candidate !== node && candidate.startsWith(prefix)) {
-					expanded.add(candidate);
-				}
-			}
-		}
-		depsMap.set(node, expanded);
+		const deps = pathDependencies(accessed, node.path, wildcardPrefixes);
+		for (const descendant of descendants) deps.add(descendant);
+		depsMap.set(node.path, deps);
 	}
 
 	return depsMap;

@@ -22,7 +22,11 @@ import type {
 	StalePolicy,
 	TraceStep,
 } from "../types.js";
-import { buildDepsMap, buildReverseDepsMap } from "./deps-maps.js";
+import {
+	buildDepsMap,
+	buildReverseDepsMap,
+	containerDescendants,
+} from "./deps-maps.js";
 import { type FlatNode, flattenGraph } from "./flatten.js";
 import { expandRuntimePaths, getByPath, setByPath } from "./path-utils.js";
 import {
@@ -683,6 +687,18 @@ class ComputeGraph<Root> implements Graph<Root> {
 			node.path,
 			this.wildcardPrefixes,
 		);
+		// Mirror the build-time container expansion: a container read discovered
+		// only at runtime (e.g. an async formula that awaits, then spreads
+		// f.nested) must still depend on computed descendants so it reorders and
+		// retries instead of committing stale/empty container data.
+		for (const descendant of containerDescendants(
+			accessed,
+			node.path,
+			this.computedKeys,
+			this.wildcardPrefixes,
+		)) {
+			runtimeDeps.add(descendant);
+		}
 		const currentDeps = this.depsMap.get(node.path) ?? new Set<string>();
 		const addedDeps: string[] = [];
 		const addedComputedDeps: string[] = [];

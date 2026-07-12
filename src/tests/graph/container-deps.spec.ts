@@ -42,4 +42,73 @@ describe("container reads depend on computed descendants", () => {
 			}),
 		).not.toThrow();
 	});
+
+	it("does not create a false cycle from an incidental parent-path visit", () => {
+		interface Root2 {
+			a: number;
+			nested: { value: number; summary: number };
+		}
+		// `a` reads the leaf f.nested.value (recording the intermediate path
+		// "nested"); `nested.summary` reads `a`. Expanding the incidental "nested"
+		// visit to sibling `nested.summary` would fabricate a cycle.
+		expect(() =>
+			createGraph<Root2>({
+				a: (f) => f.nested.value,
+				nested: { value: () => 1, summary: (f) => f.a },
+			}),
+		).not.toThrow();
+	});
+
+	it("a leaf read does not depend on unrelated computed siblings", () => {
+		interface Root2 {
+			a: number;
+			nested: { value: number; summary: number };
+		}
+		const graph = createGraph<Root2>({
+			a: (f) => f.nested.value,
+			nested: { value: () => 1, summary: () => 2 },
+		});
+		const deps = graph.deps((x) => x.a);
+		expect(deps).toContain("nested.value");
+		expect(deps).not.toContain("nested.summary");
+	});
+
+	it("a node that spreads its own parent container depends on its computed siblings", async () => {
+		interface Root2 {
+			group: { a: number; b: number; summary: number };
+		}
+		const graph = createGraph<Root2>({
+			group: {
+				a: () => 1,
+				b: () => 2,
+				summary: (f) => {
+					const g = { ...f.group };
+					return (g.a ?? 0) + (g.b ?? 0);
+				},
+			},
+		});
+		expect(graph.deps((x) => x.group.summary)).toEqual(
+			expect.arrayContaining(["group.a", "group.b"]),
+		);
+		const result = await graph.compute({});
+		expect(result.group?.summary).toBe(3);
+	});
+
+	it("recovers at runtime when an async formula spreads a container after await", async () => {
+		interface Root2 {
+			nested: { value: number };
+			derived: { value: number };
+		}
+		const graph = createGraph<Root2>({
+			// async + declared before nested.value, so the container read is only
+			// visible at runtime — the engine must reorder and retry.
+			derived: async (f) => {
+				await Promise.resolve();
+				return { ...f.nested };
+			},
+			nested: { value: () => 1 },
+		});
+		const result = await graph.compute({});
+		expect(result.derived).toEqual({ value: 1 });
+	});
 });
