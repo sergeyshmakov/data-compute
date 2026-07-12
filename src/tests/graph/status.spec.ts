@@ -189,5 +189,25 @@ describe("status and snapshot accessors", () => {
 			expect(graph.status("fast")).toBe("ready");
 			expect(["stale", "pending"]).toContain(graph.status("slow"));
 		});
+
+		it("keeps status and snapshot consistent for a discarded node", async () => {
+			const graph = createGraph<FastSlowRoot>(
+				{
+					fast: () => "fast",
+					slow: async () => {
+						await new Promise((r) => setTimeout(r, 50));
+						return "slow";
+					},
+				},
+				undefined,
+				{ stalePolicy: "discard" },
+			);
+			const p1 = graph.compute({});
+			await new Promise((r) => setTimeout(r, 0));
+			graph.compute({});
+			await p1;
+			// status(path) and snapshot(path).status must never disagree.
+			expect(graph.snapshot("slow").status).toBe(graph.status("slow"));
+		});
 	});
 });

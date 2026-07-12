@@ -1016,13 +1016,13 @@ class ComputeGraph<Root> implements Graph<Root> {
 			if (found && this.nodeStatus.get(key) === "pending") {
 				const prev = this.nodeSnap.get(key);
 				const value = prev && "value" in prev ? prev.value : undefined;
-				this.nodeStatus.set(key, "stale");
-				this.nodeSnap.set(
-					key,
-					value !== undefined
-						? { status: "stale", value }
-						: { status: "pending" },
-				);
+				// "stale" means a prior result was invalidated, so it must carry that
+				// value. A node with no prior value stays "pending" — keeping status
+				// and snapshot consistent (a stale snapshot always has a value).
+				if (value !== undefined) {
+					this.nodeStatus.set(key, "stale");
+					this.nodeSnap.set(key, { status: "stale", value });
+				}
 			}
 		}
 	}
